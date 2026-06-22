@@ -323,7 +323,7 @@ with tab4:
                     "expected_profit": "£{:,.2f}",
                     "monetary_total": "£{:,.2f}"
                 }),
-                use_container_width=True
+                width='stretch'
             )
 
             st.download_button(
