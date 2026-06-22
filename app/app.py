@@ -29,7 +29,7 @@ def load_artifacts():
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
     with open(CALIBRATOR_PATH, "rb") as f:
-        calibrator = pickle.load(f)
+        calibrator_obj = pickle.load(f)
     with open(FEATURE_NAMES_PATH, "rb") as f:
         feature_names = pickle.load(f)
     with open(CALIBRATION_METHOD_PATH, "rb") as f:
@@ -37,9 +37,9 @@ def load_artifacts():
 
     def calibrate(scores):
         if calibration_method == "isotonic":
-            return calibrator.transform(scores)
+            return calibrator_obj.transform(scores)
         else:
-            return calibrator.predict_proba(np.array(scores).reshape(-1, 1))[:, 1]
+            return calibrator_obj.predict_proba(np.array(scores).reshape(-1, 1))[:, 1]
 
     return model, calibrate, feature_names
 
@@ -56,7 +56,7 @@ def compute_expected_profit(prob, avg_monthly_spend):
 
 model, calibrate, feature_names = load_artifacts()
 
-tab1, tab2, tab3 = st.tabs(["Single Prediction", "Batch Analysis", "Model Info"])
+tab1, tab2, tab3, tab4 = st.tabs(["Single Prediction", "Batch Analysis", "Model Info", "Batch Export"])
 
 with tab1:
     st.header("Customer Churn Assessment")
@@ -240,3 +240,102 @@ with tab3:
     - Revenue saved horizon: {MONTHS_REVENUE_SAVED} months
     """)
     st.caption("Modify these in config.py to adapt to different business assumptions.")
+
+with tab4:
+    st.header("Export Intervention List")
+
+    feature_df = load_feature_matrix()
+    if feature_df is None:
+        st.error("Feature matrix not found. Run 'python run_pipeline.py' first to generate data/processed/feature_matrix.pkl")
+        st.stop()
+
+    COMPARISON_PATH = "data/processed/profit_comparison.csv"
+    THRESHOLD_PATH = "data/processed/threshold_analysis.csv"
+
+    if not os.path.exists(THRESHOLD_PATH):
+        st.error("Threshold analysis not found. Run 'python run_pipeline.py' first.")
+        st.stop()
+
+    threshold_df = pd.read_csv(THRESHOLD_PATH)
+    optimal_threshold = threshold_df.loc[threshold_df["net_profit"].idxmax(), "threshold"]
+
+    st.write(f"Using optimal threshold from training: **{optimal_threshold}**")
+
+    if st.button("Score All Customers", type="primary"):
+        with st.spinner("Scoring customers..."):
+
+            latest_windows = feature_df.sort_values("obs_end").groupby("customer_id").last().reset_index()
+
+            X_export = latest_windows[feature_names].copy()
+
+            raw_probs = model.predict_proba(X_export)[:, 1]
+            calibrated_probs = calibrate(raw_probs)
+            if isinstance(calibrated_probs, np.ndarray):
+                calibrated_probs = calibrated_probs.flatten()
+
+            latest_windows["calibrated_churn_prob"] = calibrated_probs
+
+            latest_windows["avg_monthly_spend"] = latest_windows.apply(
+                lambda row: row["monetary_total"] / MONTHS_REVENUE_SAVED
+                if row["frequency"] >= MONTHS_REVENUE_SAVED
+                else row["monetary_total"] / max(row["frequency"], 1),
+                axis=1
+            )
+
+            latest_windows["expected_profit"] = latest_windows.apply(
+                lambda row: compute_expected_profit(row["calibrated_churn_prob"], row["avg_monthly_spend"]),
+                axis=1
+            )
+
+            latest_windows["intervention_decision"] = latest_windows["expected_profit"].apply(
+                lambda x: "INTERVENE" if x > 0 else "DO NOT INTERVENE"
+            )
+
+            latest_windows["revenue_at_stake"] = latest_windows["avg_monthly_spend"] * MONTHS_REVENUE_SAVED
+
+            export_columns = [
+                "customer_id", "calibrated_churn_prob", "avg_monthly_spend",
+                "revenue_at_stake", "expected_profit", "intervention_decision",
+                "recency", "frequency", "monetary_total", "obs_end"
+            ]
+            available_export_cols = [c for c in export_columns if c in latest_windows.columns]
+            results_df = latest_windows[available_export_cols].copy()
+            results_df = results_df.sort_values("expected_profit", ascending=False)
+
+            intervene_df = results_df[results_df["intervention_decision"] == "INTERVENE"]
+            do_not_df = results_df[results_df["intervention_decision"] == "DO NOT INTERVENE"]
+
+            st.success(f"Scoring complete. {len(results_df)} customers evaluated.")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Customers", len(results_df))
+            with col2:
+                st.metric("Intervene", len(intervene_df))
+            with col3:
+                st.metric("Do Not Intervene", len(do_not_df))
+
+            st.subheader("Intervention List (Top 50 by Expected Profit)")
+            st.dataframe(
+                intervene_df.head(50).style.format({
+                    "calibrated_churn_prob": "{:.3f}",
+                    "avg_monthly_spend": "£{:,.2f}",
+                    "revenue_at_stake": "£{:,.2f}",
+                    "expected_profit": "£{:,.2f}",
+                    "monetary_total": "£{:,.2f}"
+                }),
+                use_container_width=True
+            )
+
+            st.download_button(
+                label="Download Full Intervention List (CSV)",
+                data=intervene_df.to_csv(index=False),
+                file_name="intervention_list.csv",
+                mime="text/csv"
+            )
+
+            st.download_button(
+                label="Download Full Results (CSV)",
+                data=results_df.to_csv(index=False),
+                file_name="all_customers_scored.csv",
+                mime="text/csv"
+            )
