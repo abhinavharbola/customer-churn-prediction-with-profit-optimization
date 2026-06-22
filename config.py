@@ -1,0 +1,29 @@
+import os
+
+# Paths
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+RAW_DATA_PATH = os.path.join(DATA_DIR, "raw", "online_retail_II.xlsx")
+PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
+
+# Temporal window parameters (in days)
+OBSERVATION_WINDOW_DAYS = 365
+PREDICTION_WINDOW_DAYS = 90
+SLIDE_INTERVAL_DAYS = 30
+
+# Churn definition
+CHURN_THRESHOLD_DAYS = 90
+
+# Financial constants
+COST_OF_OFFER = 10.0
+INTERVENTION_SUCCESS_RATE = 0.15
+MONTHS_REVENUE_SAVED = 3
+
+# Modeling
+RANDOM_SEED = 42
+OPTUNA_TRIALS = 50
+CALIBRATION_METHOD = "isotonic"
+
+# Evaluation
+DEFAULT_THRESHOLD = 0.5
+RANDOM_TARGET_FRACTION = 0.2
