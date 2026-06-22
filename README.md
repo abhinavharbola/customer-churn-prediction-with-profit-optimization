@@ -15,7 +15,7 @@ Standard classification metrics assume false positives and false negatives carry
 
 ## Dataset
 
-[Online Retail II (UCI)](https://archive.ics.uci.edu/dataset/502/online+retail+ii) — approximately 500,000 transactional records from a UK-based online retailer spanning 2009 to 2011.
+[Online Retail II (UCI)](https://archive.ics.uci.edu/dataset/502/online+retail+ii): Approximately 500,000 transactional records from a UK-based online retailer spanning 2009 to 2011.
 
 **Source:** UCI Machine Learning Repository. Direct download in `.xlsx` format containing two sheets (Year 2009-2010 and Year 2010-2011).
 
