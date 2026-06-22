@@ -91,7 +91,7 @@ The optimal threshold (0.76) produces higher net profit with fewer interventions
 
 ## Dashboard Features
 
-Three tabs provide a complete analytical interface:
+Four tabs provide a complete analytical and operational interface:
 
 **Single Prediction:**
 - Manual RFM feature entry with sliders or customer ID lookup from the processed feature matrix.
@@ -110,6 +110,23 @@ Three tabs provide a complete analytical interface:
 - Feature descriptions for all 12 RFM-based features.
 - Configurable parameter values with instructions for modification.
 
+**Batch Export (Operational Use):**
+- One-click scoring of all customers using their latest observation window.
+- Summary metrics: total customers, intervene count, do not intervene count.
+- Top 50 intervention candidates displayed by expected profit.
+- Download full intervention list as CSV for campaign tool import.
+- Download complete scored dataset for CRM integration or further analysis.
+
+## Expected Value Framework
+
+The profit calculation for each customer:
+
+```
+E[Profit] = P(churn) * (intervention_success_rate * avg_monthly_spend * 3 months) - intervention_cost
+```
+
+A customer is targeted only when the expected profit is positive. The INTERVENE tag is not based on churn probability alone — it requires the expected financial gain to exceed the £10 cost. A customer with 30% churn probability but only £50 monthly spend will be flagged DO NOT INTERVENE because the expected return is negative. This is the core differentiation from standard threshold-based classification.
+
 ## Configurable Parameters
 
 All constants are centralized in `config.py`:
@@ -127,16 +144,6 @@ All constants are centralized in `config.py`:
 
 Modify these to adapt the system to different business assumptions without changing pipeline code.
 
-## Expected Value Framework
-
-The profit calculation for each customer:
-
-```
-E[Profit] = P(churn) * (intervention_success_rate * avg_monthly_spend * 3 months) - intervention_cost
-```
-
-A customer is targeted only when the expected profit is positive. The optimal threshold is the probability cutoff that maximizes total campaign profit across all customers.
-
 ## Key Design Decisions
 
 - **No SMOTE or class weighting:** Preserves true base churn rate for valid probability outputs. Post-hoc calibration corrects any score distortion from imbalance.
@@ -144,6 +151,7 @@ A customer is targeted only when the expected profit is positive. The optimal th
 - **90-day churn window:** Balances false positive reduction against timely intervention. 30 days is too noisy; 180 days is too late.
 - **Sliding windows over single split:** Prevents seasonal overfitting. E-commerce has strong Q4 effects that a single snapshot cannot capture.
 - **PR-AUC over ROC-AUC:** ROC-AUC inflates performance on imbalanced data by rewarding correct ranking of abundant negatives.
+- **Per-customer expected value over aggregate threshold:** The INTERVENE tag uses individual revenue and probability, not a population-level cutoff. This captures heterogeneity in customer value that a single threshold misses.
 
 ## Limitations
 
@@ -152,3 +160,4 @@ A customer is targeted only when the expected profit is positive. The optimal th
 - The intervention success rate is a configurable constant, not a learned parameter. In production, this would come from A/B testing.
 - Cold-start customers with no transaction history cannot be scored.
 - The single optimal threshold is computed globally. Segment-specific thresholds per spend tier would capture heterogeneous cost-benefit structures.
+- The batch export uses the latest observation window per customer. Customers without a recent window are excluded.
