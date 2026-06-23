@@ -137,47 +137,59 @@ with tab1:
 
             expected_profit = compute_expected_profit(calibrated_prob, avg_monthly_spend_for_profit)
 
-            st.subheader("Results")
-            prob_col, profit_col, action_col = st.columns(3)
+            st.divider()
 
-            with prob_col:
-                st.metric("Calibrated Churn Probability", f"{calibrated_prob:.3f}")
-            with profit_col:
-                st.metric("Expected Profit Delta", f"£{expected_profit:.2f}")
-            with action_col:
+            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+            with metric_col1:
+                st.metric("Churn Probability", f"{calibrated_prob:.1%}")
+            with metric_col2:
+                st.metric("Expected Profit", f"£{expected_profit:,.2f}")
+            with metric_col3:
                 if expected_profit > 0:
-                    st.success("INTERVENE")
+                    st.success("**INTERVENE**")
                 else:
-                    st.error("DO NOT INTERVENE")
+                    st.error("**DO NOT INTERVENE**")
+            with metric_col4:
+                revenue_3m = avg_monthly_spend_for_profit * MONTHS_REVENUE_SAVED
+                st.metric("Revenue at Stake", f"£{revenue_3m:,.2f}")
 
-            st.subheader("Financial Breakdown")
-            revenue_3m = avg_monthly_spend_for_profit * MONTHS_REVENUE_SAVED
-            st.write(f"Revenue at stake (3 months): £{revenue_3m:.2f}")
-            st.write(f"Probability of churn: {calibrated_prob:.3f}")
-            st.write(f"Probability offer succeeds if churning: {INTERVENTION_SUCCESS_RATE}")
-            st.write(f"Expected revenue saved: £{calibrated_prob * INTERVENTION_SUCCESS_RATE * revenue_3m:.2f}")
-            st.write(f"Cost of intervention: £{COST_OF_OFFER:.2f}")
-            st.write(f"Expected profit: £{expected_profit:.2f}")
+            st.divider()
 
-            st.subheader("SHAP Explanation")
-            try:
-                explainer = shap.TreeExplainer(model)
-                shap_values = explainer.shap_values(input_df)
+            detail_col1, detail_col2 = st.columns(2)
 
-                fig, ax = plt.subplots()
-                shap.waterfall_plot(
-                    shap.Explanation(
-                        values=shap_values[0],
-                        base_values=explainer.expected_value,
-                        data=input_values[0],
-                        feature_names=feature_names
-                    ),
-                    show=False
-                )
-                st.pyplot(fig)
-                plt.close()
-            except Exception as e:
-                st.warning(f"SHAP explanation unavailable: {e}")
+            with detail_col1:
+                st.caption("FINANCIAL BREAKDOWN")
+                breakdown_data = {
+                    "Avg monthly spend": f"£{avg_monthly_spend_for_profit:,.2f}",
+                    "Revenue at stake (3 months)": f"£{revenue_3m:,.2f}",
+                    "Intervention success rate": f"{INTERVENTION_SUCCESS_RATE:.0%}",
+                    "Expected revenue saved": f"£{calibrated_prob * INTERVENTION_SUCCESS_RATE * revenue_3m:,.2f}",
+                    "Intervention cost": f"£{COST_OF_OFFER:,.2f}",
+                    "Expected profit": f"£{expected_profit:,.2f}",
+                }
+                for label, value in breakdown_data.items():
+                    st.write(f"{label}: {value}")
+
+            with detail_col2:
+                st.caption("SHAP EXPLANATION")
+                try:
+                    explainer = shap.TreeExplainer(model)
+                    shap_values = explainer.shap_values(input_df)
+
+                    fig, ax = plt.subplots(figsize=(5, 3))
+                    shap.waterfall_plot(
+                        shap.Explanation(
+                            values=shap_values[0],
+                            base_values=explainer.expected_value,
+                            data=input_values[0],
+                            feature_names=feature_names
+                        ),
+                        show=False
+                    )
+                    st.pyplot(fig)
+                    plt.close()
+                except Exception as e:
+                    st.warning(f"SHAP explanation unavailable: {e}")
 
 with tab2:
     st.header("Profit Optimization Analysis")
@@ -207,39 +219,56 @@ with tab2:
 with tab3:
     st.header("Model Information")
 
-    st.subheader("Architecture")
-    st.write("""
-    - **Model:** XGBoost classifier trained on natural class imbalance (no SMOTE, no class weighting).
-    - **Calibration:** Isotonic regression mapping raw scores to calibrated probabilities.
-    - **Features:** 12 RFM-based features computed over a 12-month observation window.
-    - **Tuning:** 50 Optuna trials optimizing PR-AUC.
-    """)
+    info_col1, info_col2, info_col3 = st.columns(3)
 
-    st.subheader("Feature Descriptions")
-    feature_descriptions = {
-        "recency": "Days since last purchase in observation window.",
-        "frequency": "Total number of unique invoices in observation window.",
-        "monetary_total": "Total revenue generated in observation window.",
-        "monetary_avg": "Average revenue per order.",
-        "unique_products": "Number of distinct products purchased.",
-        "spend_30d": "Total spend in the last 30 days of the observation window.",
-        "spend_90d": "Total spend in the last 90 days of the observation window.",
-        "interpurchase_mean": "Average days between consecutive purchases.",
-        "interpurchase_std": "Standard deviation of days between purchases.",
-        "spend_trend": "Slope of monthly spend over the observation window.",
-        "product_diversity": "Ratio of unique products to total orders.",
-        "seasonal_dropoff": "Purchased in Q4 of previous year but not current Q4.",
-    }
-    for feat, desc in feature_descriptions.items():
-        st.write(f"- **{feat}:** {desc}")
+    with info_col1:
+        st.subheader("Architecture")
+        st.write("""
+        - **Model:** XGBoost
+        - **Training:** Natural imbalance, no SMOTE, no weighting
+        - **Calibration:** Isotonic regression
+        - **Features:** 12 RFM-based features
+        - **Window:** 12-month observation, 90-day prediction
+        - **Tuning:** 50 Optuna trials optimizing PR-AUC
+        """)
 
-    st.subheader("Configurable Parameters")
-    st.write(f"""
-    - Intervention cost: £{COST_OF_OFFER}
-    - Intervention success rate: {INTERVENTION_SUCCESS_RATE}
-    - Revenue saved horizon: {MONTHS_REVENUE_SAVED} months
-    """)
-    st.caption("Modify these in config.py to adapt to different business assumptions.")
+    with info_col2:
+        st.subheader("Feature Descriptions")
+        feature_descriptions = {
+            "recency": "Days since last purchase",
+            "frequency": "Unique invoices in window",
+            "monetary_total": "Total revenue in window",
+            "monetary_avg": "Avg revenue per order",
+            "unique_products": "Distinct products purchased",
+            "spend_30d": "Spend in last 30 days",
+            "spend_90d": "Spend in last 90 days",
+            "interpurchase_mean": "Avg days between purchases",
+            "interpurchase_std": "Std days between purchases",
+            "spend_trend": "Slope of monthly spend",
+            "product_diversity": "Unique products / total orders",
+            "seasonal_dropoff": "Q4 drop-off flag",
+        }
+        for feat, desc in feature_descriptions.items():
+            st.write(f"- **{feat}:** {desc}")
+
+    with info_col3:
+        st.subheader("Configurable Parameters")
+        st.write(f"""
+        - Intervention cost: **£{COST_OF_OFFER}**
+        - Success rate: **{INTERVENTION_SUCCESS_RATE:.0%}**
+        - Revenue horizon: **{MONTHS_REVENUE_SAVED} months**
+        """)
+
+        st.subheader("Profit Formula")
+        st.latex(r"E[\Delta Profit] = p_i \cdot (\gamma \cdot V_i) - C")
+        st.caption("""
+        - p_i: calibrated churn probability
+        - γ: intervention success rate
+        - V_i: avg monthly spend × 3 months
+        - C: intervention cost (£10)
+        """)
+
+    st.caption("Modify parameters in config.py to adapt to different business assumptions.")
 
 with tab4:
     st.header("Export Intervention List")
@@ -249,7 +278,6 @@ with tab4:
         st.error("Feature matrix not found. Run 'python run_pipeline.py' first to generate data/processed/feature_matrix.pkl")
         st.stop()
 
-    COMPARISON_PATH = "data/processed/profit_comparison.csv"
     THRESHOLD_PATH = "data/processed/threshold_analysis.csv"
 
     if not os.path.exists(THRESHOLD_PATH):

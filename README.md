@@ -2,16 +2,41 @@
 
 Predicting customer churn for non-contractual e-commerce using RFM features, calibrated XGBoost probabilities, and a cost-sensitive decision threshold that maximizes net campaign profit.
 
-## Problem
+## Problem Statement
 
-Standard classification metrics assume false positives and false negatives carry equal cost. In churn intervention, offering a retention discount to a customer who would have stayed anyway burns budget. Failing to catch a churning customer loses revenue. Maximizing ROC-AUC or F1 ignores this asymmetry. This project replaces default 0.5 thresholding with an expected-value framework: the optimal threshold is the one that maximizes net profit after accounting for intervention cost, retention offer success rate, and the revenue at stake.
+Standard classification metrics assume false positives and false negatives carry equal cost. In churn intervention, offering a retention discount to a customer who would have stayed anyway burns budget. Failing to catch a churning customer loses revenue. Maximizing ROC-AUC or F1 ignores this asymmetry.
+
+This project replaces default 0.5 thresholding with an expected-value framework: the optimal threshold is the one that maximizes net profit after accounting for intervention cost, retention offer success rate, and the revenue at stake. Every customer receives an "INTERVENE" or "DO NOT INTERVENE" recommendation based strictly on whether the expected financial gain exceeds the intervention cost.
+
+## Dashboard Preview
+
+### Single Prediction - Manual Feature Entry
+<!-- Replace with screenshot: tab1 manual entry before prediction -->
+![Manual Feature Entry](assets/manual_entry.png)
+
+### Single Prediction - Customer ID Lookup
+<!-- Replace with screenshot: tab1 customer ID lookup mode with dropdown and results -->
+![Customer ID Lookup](assets/customer_lookup.png)
+
+### Batch Analysis - Profit Comparison
+<!-- Replace with screenshot: tab2 showing baseline comparison table, insight, and threshold sweep chart -->
+![Batch Analysis](assets/batch_analysis.png)
+
+### Model Info
+<!-- Replace with screenshot: tab3 three-column layout with architecture, features, and parameters -->
+![Model Info](assets/model_info.png)
+
+### Batch Export - Intervention List
+<!-- Replace with screenshot: tab4 after scoring, showing summary metrics, top 50 table, and download buttons -->
+![Batch Export](assets/batch_export.png)
 
 ## Architecture
 
 - **Sliding temporal windows** prevent data leakage. A 12-month observation window, 90-day prediction window, and 30-day slide interval generate multiple training examples per customer across different seasonal periods.
 - **Unweighted XGBoost** trained on the natural class imbalance preserves the true base churn rate. No SMOTE, no scale_pos_weight.
 - **Isotonic regression** calibrates raw model scores into true probabilities, a strict requirement for valid expected-value calculations.
-- **Profit optimizer** sweeps thresholds from 0.10 to 0.90, computes expected net profit at each step using a configurable intervention cost and success rate, and selects the argmax.
+- **Profit optimizer** sweeps thresholds from 0.10 to 0.90, computes expected net profit at each step, and selects the argmax.
+- **Batch export** generates a downloadable intervention list for campaign tools, with per-customer financial justification.
 
 ## Dataset
 
@@ -44,7 +69,8 @@ churn-profit-opt/
 ├── data/
 │   ├── raw/                     # Place online_retail_II.xlsx here
 │   └── processed/               # Generated feature matrices and results
-└── models/                      # Serialized model, calibrator, feature names
+├── models/                      # Serialized model, calibrator, feature names
+└── assets/                 # Dashboard assets for README
 ```
 
 ## Setup
@@ -82,7 +108,7 @@ The profit-optimized threshold consistently outperforms the default 0.5 cutoff a
 | Default Threshold (0.5) | 5,481 | 4,594 | 887 | £36,856 |
 | **Profit-Optimized** | **3,995** | **3,608** | **387** | **£39,527** |
 
-The optimal threshold (0.76) produces higher net profit with fewer interventions, reducing both operational cost and unnecessary customer contact.
+The optimal threshold (0.76) produces **7.2% higher net profit** than the 0.5 default with **27% fewer interventions**, reducing both operational cost and unnecessary customer contact.
 
 **Evaluation metrics (validation set):**
 - PR-AUC: 0.909
@@ -95,10 +121,9 @@ Four tabs provide a complete analytical and operational interface:
 
 **Single Prediction:**
 - Manual RFM feature entry with sliders or customer ID lookup from the processed feature matrix.
-- Calibrated churn probability with confidence-level display.
-- Financial breakdown showing revenue at stake, expected revenue saved, intervention cost, and net expected profit.
-- Hard "INTERVENE" or "DO NOT INTERVENE" recommendation based on expected value.
-- SHAP waterfall plot showing per-prediction feature attribution.
+- Four-metric summary row: calibrated churn probability, expected profit, INTERVENE/DO NOT INTERVENE recommendation, and revenue at stake.
+- Side-by-side financial breakdown and SHAP waterfall plot for compact, no-scroll viewing.
+- Financial breakdown shows all components of the expected value calculation explicitly.
 
 **Batch Analysis:**
 - Profit comparison table across random, default threshold, and profit-optimized strategies.
@@ -106,11 +131,11 @@ Four tabs provide a complete analytical and operational interface:
 - Threshold sweep line chart visualizing net profit across the full threshold range.
 
 **Model Info:**
-- Architecture overview documenting training and calibration methodology.
-- Feature descriptions for all 12 RFM-based features.
-- Configurable parameter values with instructions for modification.
+- Three-column layout: architecture overview, feature descriptions, and configurable parameters.
+- Profit formula displayed with LaTeX rendering.
+- All information visible without scrolling.
 
-**Batch Export (Operational Use):**
+**Batch Export:**
 - One-click scoring of all customers using their latest observation window.
 - Summary metrics: total customers, intervene count, do not intervene count.
 - Top 50 intervention candidates displayed by expected profit.
@@ -125,7 +150,7 @@ The profit calculation for each customer:
 E[Profit] = P(churn) * (intervention_success_rate * avg_monthly_spend * 3 months) - intervention_cost
 ```
 
-A customer is targeted only when the expected profit is positive. The INTERVENE tag is not based on churn probability alone — it requires the expected financial gain to exceed the £10 cost. A customer with 30% churn probability but only £50 monthly spend will be flagged DO NOT INTERVENE because the expected return is negative. This is the core differentiation from standard threshold-based classification.
+A customer is targeted only when the expected profit is positive. The INTERVENE tag is not based on churn probability alone — it requires the expected financial gain to exceed the intervention cost. A customer with 30% churn probability but low monthly spend will be flagged DO NOT INTERVENE because the expected return is negative. This is the core differentiation from standard threshold-based classification.
 
 ## Configurable Parameters
 
@@ -156,8 +181,16 @@ Modify these to adapt the system to different business assumptions without chang
 ## Limitations
 
 - Cancellation matching uses fuzzy logic on invoice prefixes. Orphaned partial refunds without a matching valid invoice are dropped.
-- The current validation split is random across the concatenated feature matrix, not stratified by customer ID. A customer may appear in both train and validation across different windows. A stricter approach would split by customer.
+- The current validation split is random across the concatenated feature matrix, not stratified by customer ID. A customer may appear in both train and validation across different windows.
 - The intervention success rate is a configurable constant, not a learned parameter. In production, this would come from A/B testing.
 - Cold-start customers with no transaction history cannot be scored.
 - The single optimal threshold is computed globally. Segment-specific thresholds per spend tier would capture heterogeneous cost-benefit structures.
 - The batch export uses the latest observation window per customer. Customers without a recent window are excluded.
+
+Place your assets in a `assets/` folder at the project root, named:
+- `manual_entry.png` — Manual feature entry form before clicking predict
+- `prediction_results.png` — Results after prediction with metrics, breakdown, and SHAP
+- `customer_lookup.png` — Customer ID lookup mode with dropdown and results
+- `batch_analysis.png` — Batch analysis tab with comparison table and chart
+- `model_info.png` — Model info tab with three-column layout
+- `batch_export.png` — Batch export tab after scoring with table and download buttons
