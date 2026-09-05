@@ -31,7 +31,7 @@ A full code audit (not just a prose pass) found and fixed five real bugs beyond 
 
 - **Cancellation netting corrupted unrelated line items** (`src/data/cleaner.py`). A cancellation was matched to a specific `(invoice, customer_id, stockcode)`, but the quantity correction was applied indexed by invoice number alone. Since one invoice can carry several stockcodes, the cancelled quantity was subtracted from every line on that invoice, not just the matched one. Fixed by indexing the correction on `(invoice, stockcode)`. Covered by `tests/test_cleaner.py`.
 - **That same code path referenced a column that doesn't exist.** The merge that matches cancellations to transactions never produces a `quantity_cancel` column (only one side of the join has a `quantity` column, so pandas never suffixes it). On real data with any matched cancellation, this raised a `KeyError` and the pipeline never actually completed a run with the netting logic in place. Fixed alongside the point above.
-- **The 3-month revenue horizon silently collapsed to the full 12-month total.** The dashboard computed `avg_monthly_spend = monetary_total / MONTHS_REVENUE_SAVED`, then `revenue_saved = avg_monthly_spend * MONTHS_REVENUE_SAVED`. The division and multiplication by the same constant cancel out exactly, so "3 months of revenue at stake" was actually each customer's entire 12-month spend, a 4x overstatement for any customer with 3 or more orders. The training pipeline used yet a third, different figure (`monetary_avg`, mean revenue per line item) for the same concept, so the threshold chosen during training wasn't even calibrated against what the dashboard used at serving time. Fixed with one shared `compute_avg_monthly_spend()` in `src/evaluation/profit_optimizer.py`, used identically by `run_pipeline.py` and `app/app.py`.
+- **The 3-month revenue horizon silently collapsed to the full 12-month total.** The dashboard computed `avg_monthly_spend = monetary_total / MONTHS_REVENUE_SAVED`, then `revenue_saved = avg_monthly_spend * MONTHS_REVENUE_SAVED`. The division and multiplication by the same constant cancel out exactly, so "3 months of revenue at stake" was actually each customer's entire 12-month spend, a 4x overstatement for any customer with 3 or more orders. The training pipeline used yet a third, different figure (`monetary_avg`, mean revenue per line item) for the same concept, so the threshold chosen during training wasn't even calibrated against what the dashboard used at serving time. Fixed with one shared `compute_avg_monthly_spend()` in `src/evaluation/profit_optimizer.py`, used identically by `scripts/run_pipeline.py` and `app/app.py`.
 - **`seasonal_dropoff` was silently always 0 for about 75% of windows.** It compared calendar-Q4 date ranges, but those ranges frequently fall outside the 365-day observation window the feature is computed on. Whenever the window's reference date fell before October, the comparison period was mathematically guaranteed to be missing from the data. Redefined as a relative 90-day/180-day comparison that always fits inside the observation window regardless of calendar month. Covered by `tests/test_rfm_engineer.py`.
 - **Manual feature entry built its model input by position, not by name.** It happened to match the model's actual feature order today, but nothing enforced that; a reorder in `rfm_engineer.py` would silently mislabel every value with no error. Now built as a name-keyed dict and reindexed against the model's own `feature_names`, matching the (already-safe) customer-lookup path, and fails loudly if a feature is missing instead of mislabeling it.
 - **Batch Export's on-screen message didn't match its logic.** It told users scoring would use "the optimal threshold from training," but the code actually used per-customer expected value, which is the intentional, documented design (see Key Design Decisions). The message was inaccurate, not the logic. Fixed the message.
@@ -56,7 +56,7 @@ A full code audit (not just a prose pass) found and fixed five real bugs beyond 
 
 **Source:** UCI Machine Learning Repository. Direct download in `.xlsx` format containing two sheets, `Year 2009-2010` and `Year 2010-2011`. `src/data/cleaner.py` loads and concatenates both (`load_raw_data`).
 
-The pipeline drops rows with a missing customer ID, nets cancellations against their matching invoice and stockcode, removes non-positive quantities and prices, and only then computes revenue and RFM features. That cleaning step changes the row count substantially from the raw 1,067,371. Run `python run_pipeline.py`; it prints the exact post-cleaning count as `Cleaned transactions: <n>`. That figure is intentionally not hardcoded here since it depends on the actual data file in `data/raw/`.
+The pipeline drops rows with a missing customer ID, nets cancellations against their matching invoice and stockcode, removes non-positive quantities and prices, and only then computes revenue and RFM features. That cleaning step changes the row count substantially from the raw 1,067,371. Run `python scripts/run_pipeline.py`; it prints the exact post-cleaning count as `Cleaned transactions: <n>`. That figure is intentionally not hardcoded here since it depends on the actual data file in `data/raw/`.
 
 ## Project Structure
 
@@ -65,7 +65,8 @@ churn-profit-opt/
 ├── config.py                    # All constants, paths, financial parameters
 ├── requirements.txt
 ├── .gitignore
-├── run_pipeline.py              # End-to-end training and evaluation script
+├── scripts/
+│   └── run_pipeline.py          # End-to-end training and evaluation script
 ├── src/
 │   ├── data/
 │   │   ├── cleaner.py           # Missing ID removal, invoice+stockcode cancellation netting
@@ -110,7 +111,7 @@ Download `online_retail_II.xlsx` from the [UCI repository](https://archive.ics.u
 
 **3. Run the pipeline:**
 ```bash
-python run_pipeline.py
+python scripts/run_pipeline.py
 ```
 This executes cleaning, window generation, feature engineering, hyperparameter tuning (50 Optuna trials against a held-out validation split), the customer-grouped train/validation/test split, calibration and final reporting on a test split Optuna never saw, and profit optimization. Serialized model artifacts are saved to `models/`. Processed data and comparison results are saved to `data/processed/`.
 
@@ -130,7 +131,7 @@ The previous revision of this README reported PR-AUC 0.909, Brier score 0.135, a
 
 The split has been replaced with a customer-grouped, three-way split (`grouped_train_val_test_split` in `src/modeling/trainer.py`): train fits the model, validation is Optuna's tuning target, and test is held out completely from tuning and used only once, for calibration and final reporting. This closes two separate issues, not one: the original customer-overlap leak described above, and a second, independent problem found on a later audit pass, where the same validation set used for tuning was also being used to calibrate and report final metrics ("tuning on the test set"), which is optimistic regardless of the customer-overlap question. Both are verified by `tests/test_grouped_split.py`, which checks pairwise disjointness across all three sets and that every row lands in exactly one of them. That fix is in code and covered by tests, but this environment does not have network access to the UCI dataset, so the pipeline could not actually be re-run against the real file to regenerate PR-AUC, Brier score, the optimal threshold, or the profit comparison table. The old numbers are removed rather than left in place, since they were produced by the leaky split and would misrepresent the corrected pipeline.
 
-To regenerate this table, run `python run_pipeline.py` end to end and copy the printed PR-AUC, Brier score, optimal threshold, and `data/processed/profit_comparison.csv` into this section. Expect PR-AUC and net profit to come in lower than the previous figures: the corrected split removes two separate sources of inflation, it does not add information.
+To regenerate this table, run `python scripts/run_pipeline.py` end to end and copy the printed PR-AUC, Brier score, optimal threshold, and `data/processed/profit_comparison.csv` into this section. Expect PR-AUC and net profit to come in lower than the previous figures: the corrected split removes two separate sources of inflation, it does not add information.
 
 ## Dashboard Features
 

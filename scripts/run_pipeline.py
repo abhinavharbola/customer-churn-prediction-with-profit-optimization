@@ -1,7 +1,11 @@
 import os
+import sys
 import pickle
 import pandas as pd
-from config import PROCESSED_DIR, DEFAULT_THRESHOLD, RANDOM_TARGET_FRACTION, CALIBRATION_METHOD
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from config import PROCESSED_DIR, MODELS_DIR, DEFAULT_THRESHOLD, RANDOM_TARGET_FRACTION, CALIBRATION_METHOD
 
 from src.data.cleaner import run_cleaning
 from src.data.temporal import generate_windows
@@ -17,7 +21,7 @@ from src.evaluation.profit_optimizer import (
 )
 
 os.makedirs(PROCESSED_DIR, exist_ok=True)
-os.makedirs("models", exist_ok=True)
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 print("=== 1. Cleaning raw data ===")
 df_clean = run_cleaning()
@@ -100,13 +104,13 @@ comparison_df.to_csv(os.path.join(PROCESSED_DIR, "profit_comparison.csv"), index
 threshold_results.to_csv(os.path.join(PROCESSED_DIR, "threshold_analysis.csv"), index=False)
 
 print("=== 9. Saving artifacts ===")
-with open("models/xgb_model.pkl", "wb") as f:
+with open(os.path.join(MODELS_DIR, "xgb_model.pkl"), "wb") as f:
     pickle.dump(model, f)
-with open("models/calibrator.pkl", "wb") as f:
+with open(os.path.join(MODELS_DIR, "calibrator.pkl"), "wb") as f:
     pickle.dump(calibrator, f)
-with open("models/feature_names.pkl", "wb") as f:
+with open(os.path.join(MODELS_DIR, "feature_names.pkl"), "wb") as f:
     pickle.dump(feature_cols, f)
-with open("models/calibration_method.pkl", "wb") as f:
+with open(os.path.join(MODELS_DIR, "calibration_method.pkl"), "wb") as f:
     pickle.dump(CALIBRATION_METHOD, f)
 
 print("\nPipeline complete. Run 'streamlit run app/app.py' for dashboard.")

@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import COST_OF_OFFER, INTERVENTION_SUCCESS_RATE, MONTHS_REVENUE_SAVED
+from config import COST_OF_OFFER, INTERVENTION_SUCCESS_RATE, MONTHS_REVENUE_SAVED, MODELS_DIR, PROCESSED_DIR
 from src.evaluation.explainability import get_tree_explainer, compute_shap_explanation
 from src.evaluation.profit_optimizer import compute_expected_profit, compute_avg_monthly_spend
 
@@ -250,11 +250,11 @@ section[data-testid="stSidebar"] .block-container {{
 
 st.markdown(THEME_CSS, unsafe_allow_html=True)
 
-MODEL_PATH = "models/xgb_model.pkl"
-CALIBRATOR_PATH = "models/calibrator.pkl"
-FEATURE_NAMES_PATH = "models/feature_names.pkl"
-CALIBRATION_METHOD_PATH = "models/calibration_method.pkl"
-FEATURE_MATRIX_PATH = "data/processed/feature_matrix.pkl"
+MODEL_PATH = os.path.join(MODELS_DIR, "xgb_model.pkl")
+CALIBRATOR_PATH = os.path.join(MODELS_DIR, "calibrator.pkl")
+FEATURE_NAMES_PATH = os.path.join(MODELS_DIR, "feature_names.pkl")
+CALIBRATION_METHOD_PATH = os.path.join(MODELS_DIR, "calibration_method.pkl")
+FEATURE_MATRIX_PATH = os.path.join(PROCESSED_DIR, "feature_matrix.pkl")
 
 FEATURE_LABELS = {
     "recency": "Recency (days)",
@@ -275,7 +275,7 @@ FEATURE_LABELS = {
 @st.cache_resource
 def load_artifacts():
     if not all(os.path.exists(p) for p in [MODEL_PATH, CALIBRATOR_PATH, FEATURE_NAMES_PATH, CALIBRATION_METHOD_PATH]):
-        st.error("Model artifacts not found. Run 'python run_pipeline.py' first.")
+        st.error("Model artifacts not found. Run 'python scripts/run_pipeline.py' first.")
         st.stop()
 
     with open(MODEL_PATH, "rb") as f:
@@ -446,7 +446,7 @@ with tab1:
 
         feature_df = load_feature_matrix()
         if feature_df is None:
-            st.error("Feature matrix not found. Run 'python run_pipeline.py' first.")
+            st.error("Feature matrix not found. Run 'python scripts/run_pipeline.py' first.")
             st.stop()
 
         available_ids = sorted(feature_df["customer_id"].unique())
@@ -526,8 +526,8 @@ with tab1:
                 st.warning(f"SHAP explanation unavailable: {e}")
 
 with tab2:
-    COMPARISON_PATH = "data/processed/profit_comparison.csv"
-    THRESHOLD_PATH = "data/processed/threshold_analysis.csv"
+    COMPARISON_PATH = os.path.join(PROCESSED_DIR, "profit_comparison.csv")
+    THRESHOLD_PATH = os.path.join(PROCESSED_DIR, "threshold_analysis.csv")
 
     if os.path.exists(COMPARISON_PATH):
         comparison_df = pd.read_csv(COMPARISON_PATH)
@@ -559,7 +559,7 @@ with tab2:
             st.plotly_chart(render_threshold_chart(threshold_df, optimal_threshold), use_container_width=True)
             st.caption("Net profit at each candidate threshold. The marker sits at the argmax.")
     else:
-        st.info("Profit comparison data not found. Run 'python run_pipeline.py' first.")
+        st.info("Profit comparison data not found. Run 'python scripts/run_pipeline.py' first.")
 
 with tab3:
     info_col1, info_col2, info_col3 = st.columns(3)
@@ -630,12 +630,12 @@ with tab3:
 with tab4:
     feature_df = load_feature_matrix()
     if feature_df is None:
-        st.error("Feature matrix not found. Run 'python run_pipeline.py' first.")
+        st.error("Feature matrix not found. Run 'python scripts/run_pipeline.py' first.")
         st.stop()
 
-    THRESHOLD_PATH = "data/processed/threshold_analysis.csv"
+    THRESHOLD_PATH = os.path.join(PROCESSED_DIR, "threshold_analysis.csv")
     if not os.path.exists(THRESHOLD_PATH):
-        st.error("Threshold analysis not found. Run 'python run_pipeline.py' first.")
+        st.error("Threshold analysis not found. Run 'python scripts/run_pipeline.py' first.")
         st.stop()
 
     st.markdown(
