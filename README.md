@@ -8,23 +8,6 @@ Standard classification metrics assume false positives and false negatives carry
 
 This project replaces default 0.5 thresholding with an expected-value framework: the optimal threshold is the one that maximizes net profit after accounting for intervention cost, retention offer success rate, and the revenue at stake. Every customer receives an "INTERVENE" or "DO NOT INTERVENE" recommendation based strictly on whether the expected financial gain exceeds the intervention cost.
 
-## Dashboard Preview
-
-### Single Prediction, Manual Feature Entry
-![Manual Feature Entry](assets/manual_entry.png)
-
-### Single Prediction, Customer ID Lookup
-![Customer ID Lookup](assets/customer_lookup.png)
-
-### Batch Analysis, Profit Comparison
-![Batch Analysis](assets/batch_analysis.png)
-
-### Model Info
-![Model Info](assets/model_info.png)
-
-### Batch Export, Intervention List
-![Batch Export](assets/batch_export.png)
-
 ## Bug Fixes in This Revision
 
 A full code audit (not just a prose pass) found and fixed five real bugs beyond the validation leak in [Key Results](#key-results). Each is covered by a regression test.
