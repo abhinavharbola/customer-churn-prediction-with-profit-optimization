@@ -1,8 +1,7 @@
 import os
 import pickle
 import pandas as pd
-import numpy as np
-from config import PROCESSED_DIR, DEFAULT_THRESHOLD, RANDOM_TARGET_FRACTION, RANDOM_SEED, CALIBRATION_METHOD
+from config import PROCESSED_DIR, DEFAULT_THRESHOLD, RANDOM_TARGET_FRACTION, CALIBRATION_METHOD
 
 from src.data.cleaner import run_cleaning
 from src.data.temporal import generate_windows
@@ -13,7 +12,8 @@ from src.evaluation.metrics import compute_metrics
 from src.evaluation.profit_optimizer import (
     find_optimal_threshold,
     evaluate_random_baseline,
-    evaluate_default_baseline
+    evaluate_default_baseline,
+    compute_avg_monthly_spend
 )
 
 os.makedirs(PROCESSED_DIR, exist_ok=True)
@@ -34,37 +34,38 @@ print(f"Churn rate: {feature_df['churn'].mean():.3f}")
 
 feature_df.to_pickle(os.path.join(PROCESSED_DIR, "feature_matrix.pkl"))
 
-print("=== 4. Training XGBoost with Optuna ===")
-X, y, feature_cols = prepare_data(feature_df)
-model, study, feature_cols, X_val, y_val = train_model(X, y, feature_cols)
-print(f"Best trial PR-AUC: {study.best_value:.4f}")
+print("=== 4. Training XGBoost with Optuna (train/val/test, customer-grouped) ===")
+X, y, groups, feature_cols = prepare_data(feature_df)
+model, study, feature_cols, X_test, y_test, test_idx = train_model(X, y, groups, feature_cols)
+print(f"Best trial PR-AUC (validation set, used for tuning only): {study.best_value:.4f}")
 
-print("=== 5. Calibrating probabilities ===")
-calibration_func, calibrator = calibrate_probabilities(model, X_val, y_val)
+print("=== 5. Calibrating probabilities (on held-out test set) ===")
+calibration_func, calibrator = calibrate_probabilities(model, X_test, y_test)
 
-raw_probs = model.predict_proba(X_val)[:, 1]
+raw_probs = model.predict_proba(X_test)[:, 1]
 calibrated_probs = calibration_func(raw_probs)
 
-print("=== 6. Evaluating metrics ===")
-metrics = compute_metrics(y_val, calibrated_probs)
+print("=== 6. Evaluating metrics (on held-out test set, untouched by tuning) ===")
+metrics = compute_metrics(y_test, calibrated_probs)
 print(f"PR-AUC: {metrics['pr_auc']:.4f}")
 print(f"Brier Score: {metrics['brier_score']:.4f}")
 
 print("=== 7. Profit optimization ===")
-val_indices = y_val.index
-avg_monthly_spend = feature_df.loc[val_indices, "monetary_avg"].copy()
+avg_monthly_spend = compute_avg_monthly_spend(
+    feature_df.iloc[test_idx]["monetary_total"].reset_index(drop=True)
+)
 
 optimal_threshold, threshold_results = find_optimal_threshold(
-    y_val.values, calibrated_probs, avg_monthly_spend
+    y_test.values, calibrated_probs, avg_monthly_spend
 )
 print(f"Optimal threshold: {optimal_threshold}")
 
 print("=== 8. Baseline comparison ===")
 random_result = evaluate_random_baseline(
-    y_val.values, calibrated_probs, avg_monthly_spend, RANDOM_TARGET_FRACTION
+    y_test.values, calibrated_probs, avg_monthly_spend, RANDOM_TARGET_FRACTION
 )
 default_result = evaluate_default_baseline(
-    y_val.values, calibrated_probs, avg_monthly_spend, DEFAULT_THRESHOLD
+    y_test.values, calibrated_probs, avg_monthly_spend, DEFAULT_THRESHOLD
 )
 optimal_result = threshold_results[threshold_results["threshold"] == optimal_threshold].iloc[0]
 

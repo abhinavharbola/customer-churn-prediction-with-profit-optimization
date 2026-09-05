@@ -1,6 +1,6 @@
 import pandas as pd
-import numpy as np
-from config import RAW_DATA_PATH, RANDOM_SEED
+from config import RAW_DATA_PATH
+
 
 def load_raw_data():
     df_0910 = pd.read_excel(RAW_DATA_PATH, sheet_name="Year 2009-2010", engine="openpyxl")
@@ -8,32 +8,27 @@ def load_raw_data():
     df = pd.concat([df_0910, df_1011], ignore_index=True)
     return df
 
+
 def clean_data(df):
     df = df.copy()
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
 
-    # Drop rows with missing CustomerID
     df = df.dropna(subset=["customer_id"])
     df["customer_id"] = df["customer_id"].astype(int)
 
-    # Parse dates
     df["invoicedate"] = pd.to_datetime(df["invoicedate"])
 
-    # Separate cancellations and valid transactions
     df["is_cancellation"] = df["invoice"].astype(str).str.startswith("C")
     cancellations = df[df["is_cancellation"]].copy()
     transactions = df[~df["is_cancellation"]].copy()
 
-    # Remove negative quantities from valid transactions
     transactions = transactions[transactions["quantity"] > 0]
 
-    # Fuzzy match cancellations to valid invoices
     cancellations["matched_invoice"] = cancellations["invoice"].astype(str).str.replace("^C", "", regex=True)
     cancellations["quantity"] = cancellations["quantity"].abs()
 
-    # Merge cancellations with transactions to net out quantities
     cancellation_matches = cancellations.merge(
-        transactions[["invoice", "customer_id", "stockcode"]],
+        transactions[["invoice", "customer_id", "stockcode"]].drop_duplicates(),
         left_on=["matched_invoice", "customer_id", "stockcode"],
         right_on=["invoice", "customer_id", "stockcode"],
         how="inner",
@@ -41,24 +36,51 @@ def clean_data(df):
     )
 
     if not cancellation_matches.empty:
-        matched_indices = cancellation_matches["invoice_trans"].values
-        matched_quantities = cancellation_matches.groupby("invoice_trans")["quantity_cancel"].sum()
-        transactions = transactions.set_index("invoice")
-        transactions.loc[matched_indices, "quantity"] -= matched_quantities
+        matched_quantities = cancellation_matches.groupby(
+            ["invoice_trans", "stockcode"]
+        )["quantity"].sum()
+
+        transactions = transactions.set_index(["invoice", "stockcode"])
+        affected_mask = transactions.index.isin(matched_quantities.index)
+        affected = transactions[affected_mask].copy()
+        unaffected = transactions[~affected_mask]
+
+        affected["_cancel_remaining"] = 0.0
+        affected.loc[matched_quantities.index, "_cancel_remaining"] = matched_quantities.astype(float)
+
+        def _net_group(group):
+            remaining = group["_cancel_remaining"].iloc[0]
+            if remaining <= 0:
+                return group
+            qty = group["quantity"].to_numpy(dtype=float)
+            for i in range(len(qty)):
+                take = min(remaining, qty[i])
+                qty[i] -= take
+                remaining -= take
+                if remaining <= 0:
+                    break
+            group = group.copy()
+            group["quantity"] = qty
+            return group
+
+        affected = affected.groupby(
+            level=["invoice", "stockcode"], group_keys=False
+        ).apply(_net_group)
+        affected = affected.drop(columns="_cancel_remaining")
+
+        transactions = pd.concat([unaffected, affected])
         transactions = transactions[transactions["quantity"] > 0].reset_index()
 
     df_clean = transactions.copy()
 
-    # Create monetary column
     df_clean["revenue"] = df_clean["quantity"] * df_clean["price"]
 
-    # Remove rows with zero or negative price
     df_clean = df_clean[df_clean["price"] > 0]
 
-    # Sort by date
     df_clean = df_clean.sort_values(["customer_id", "invoicedate"]).reset_index(drop=True)
 
     return df_clean
+
 
 def run_cleaning():
     df_raw = load_raw_data()

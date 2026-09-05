@@ -3,11 +3,8 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from config import CALIBRATION_METHOD
 
+
 def calibrate_probabilities(model, X_val, y_val, method=CALIBRATION_METHOD):
-    """
-    Calibrates model probability outputs using isotonic regression or Platt scaling.
-    Returns a calibration function that maps raw scores to calibrated probabilities.
-    """
     raw_scores = model.predict_proba(X_val)[:, 1]
 
     if method == "isotonic":
