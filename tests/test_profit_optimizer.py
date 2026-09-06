@@ -21,7 +21,7 @@ def test_threshold_sweep_covers_full_configured_range():
     y_true, y_prob, avg_monthly_spend = _synthetic_case()
     _, results_df = find_optimal_threshold(y_true, y_prob, avg_monthly_spend)
 
-    assert results_df["threshold"].min() == 0.10
+    assert results_df["threshold"].min() == 0.01
     assert results_df["threshold"].max() == 0.90
 
 

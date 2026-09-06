@@ -45,7 +45,7 @@ def _evaluate(y_true, predictions, avg_monthly_spend):
     }
 
 
-def find_optimal_threshold(y_true, y_prob, avg_monthly_spend, thresholds=np.arange(0.1, 0.91, 0.01)):
+def find_optimal_threshold(y_true, y_prob, avg_monthly_spend, thresholds=np.arange(0.01, 0.91, 0.01)):
     results = []
 
     for t in thresholds:

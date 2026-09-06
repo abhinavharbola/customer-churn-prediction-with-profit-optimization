@@ -8,6 +8,23 @@ Standard classification metrics assume false positives and false negatives carry
 
 This project replaces default 0.5 thresholding with an expected-value framework: the optimal threshold is the one that maximizes net profit after accounting for intervention cost, retention offer success rate, and the revenue at stake. Every customer receives an "INTERVENE" or "DO NOT INTERVENE" recommendation based strictly on whether the expected financial gain exceeds the intervention cost.
 
+## Dashboard Preview
+
+### Single Prediction, Manual Feature Entry
+![Manual Feature Entry](assets/manual_entry.png)
+
+### Single Prediction, Customer ID Lookup
+![Customer ID Lookup](assets/customer_lookup.png)
+
+### Batch Analysis, Profit Comparison
+![Batch Analysis](assets/batch_analysis.png)
+
+### Model Info
+![Model Info](assets/model_info.png)
+
+### Batch Export, Intervention List
+![Batch Export](assets/batch_export.png)
+
 ## Bug Fixes in This Revision
 
 A full code audit (not just a prose pass) found and fixed five real bugs beyond the validation leak in [Key Results](#key-results). Each is covered by a regression test.
@@ -22,7 +39,12 @@ A full code audit (not just a prose pass) found and fixed five real bugs beyond 
 - **That same fix was also impractically slow at real scale.** The corrected logic ran a Python-level function over every `(invoice, stockcode)` group in the dataset, not just the ones with a matched cancellation. On a 300K-row synthetic test this didn't finish in a reasonable time; the real dataset is roughly 3-4x that size. Fixed by splitting the affected (matched) rows from the unaffected majority up front, running the row-by-row netting logic only on the small affected subset, and passing the rest through untouched. A 1M-row benchmark with 10,000 cancellations now completes in about 47 seconds.
 - **The validation set was reused for tuning, calibration, and final reporting all at once.** Optuna's hyperparameter search directly optimized PR-AUC on the same set that was then used to fit the isotonic calibrator, compute the reported PR-AUC and Brier score, and select the profit-optimal threshold. Since the model's hyperparameters were chosen specifically to score well on that set, reporting performance on it again is optimistic by construction, the classic "tuning on the test set" problem, separate from the customer-overlap leak already described above. Fixed with a proper three-way customer-grouped split: `train` fits the model, `val` is Optuna's tuning target only, and `test` is held out completely from tuning and touched exactly once, for calibration and final reporting. Covered by `tests/test_grouped_split.py`, which now verifies pairwise disjointness across all three sets, not just two.
 - **The formula panel in Model Info didn't nest correctly.** A styled `<div>` was opened in one `st.markdown()` call and closed in a separate call with `st.latex()` in between. Streamlit renders each call as an isolated block, so HTML can't be split across calls like that; the div would auto-close empty and the formula would render outside it, unstyled. Fixed by rendering the formula as a single self-contained HTML block instead of relying on `st.latex()`.
-- **A Streamlit API version mismatch.** `width='stretch'` was used in some dataframe calls while `use_container_width=True` was used elsewhere for the same purpose. `width='stretch'` is a very recent addition and doesn't exist on the `streamlit>=1.25.0` floor this project pins in `requirements.txt`; it would raise a `TypeError` on that version. Standardized on `use_container_width=True`, which is supported across the whole pinned range.
+- **A Streamlit API version mismatch, corrected twice.** First pass: `width='stretch'` was used in some dataframe calls while `use_container_width=True` was used elsewhere, and since I couldn't verify which was actually safe at the time, I standardized on `use_container_width=True` on the assumption that `width=` might not exist on the `streamlit>=1.25.0` floor this project pinned. That assumption turned out to be overly cautious: a real run's logs showed the installed Streamlit version emitting a deprecation warning that explicitly recommends replacing `use_container_width` with `width='stretch'`, meaning `width=` was actually the safe, current, non-deprecated choice, and `use_container_width` was itself the one on its way out. Reversed course: switched to `width='stretch'` throughout and raised the `requirements.txt` floor to `streamlit>=1.40.0`, an evidence-based floor rather than a guess. If you're on an older pinned Streamlit for other reasons, `use_container_width=True` still works there today, just with a deprecation warning in the logs.
+- **The dashboard's text was largely illegible: pale, near-invisible on a pale background.** Real screenshots from an actual run showed the sidebar, several info panels, and the threshold chart rendering in washed-out ghost text. The root cause: several CSS classes and raw HTML elements never set an explicit text color, relying on inheritance, and Streamlit's own default text color (driven by the user's OS/browser dark-mode preference when no theme is explicitly configured) doesn't reliably cascade the way a plain `body { color: ... }` rule expects. Fixed at the root with `.streamlit/config.toml`, which explicitly sets the app's theme so it no longer depends on the visitor's OS or browser dark-mode setting, and gave every custom HTML element its own explicit color rather than relying on inheritance.
+- **The palette itself was replaced.** The previous pale stone-paper theme read as generic. Replaced with a dark "ledger book" palette (bottle green, brass gold, oxblood) that's thematically grounded in the project (a financial ledger) and visually distinct from both common AI-generated palette clichés. Every foreground/background pairing was checked against WCAG AA contrast requirements (all pass, 4.6:1 or higher) before shipping, not assumed.
+- **A leftover variable rename caused a `NameError` waiting to happen.** During the palette rewrite, two inline styles in the sidebar still referenced the old palette variable name (`PROFIT`) that no longer existed after the rename to `GOLD`. Caught by grepping for stale references and fixed before it could crash the sidebar on first load.
+- **A real crash bug, found only by actually executing the app, not by reading the code.** `ZeroDivisionError` in the Batch Analysis tab: `lift_pct = (optimal_profit - default_profit) / default_profit * 100` has no guard against `default_profit` being exactly zero, which happens whenever the default-threshold (0.5) baseline strategy nets zero profit, a real, reachable state depending on the data and cost parameters. This would take down the whole app, not just that tab, since the calculation runs unconditionally on every script rerun regardless of which tab is visible. Found using Streamlit's own `AppTest` headless testing framework, which actually executes the script and every button-click flow end to end rather than just reading the source. Fixed by falling back to an absolute profit delta (with a clear caveat) whenever the baseline is zero or negative, since a percentage lift over a zero or negative base isn't a meaningful number anyway.
+- **The reported "optimal threshold" was an artifact of an arbitrary search boundary, not a true optimum.** A real pipeline run (dataset owner's own logs) reported `Optimal threshold: 0.1`, and the threshold sweep chart showed net profit still strictly decreasing all the way to that value with no interior peak, meaning the true optimum was being cut off by the hardcoded lower bound of the search grid (`np.arange(0.1, 0.91, 0.01)`), not found by it. Widened the default search range's lower bound to 0.01 in `find_optimal_threshold` (`src/evaluation/profit_optimizer.py`) so the reported optimum reflects a genuine argmax rather than a boundary artifact. This is a search-range bug, not a claim about what the "correct" threshold should be; if profit is still rising at 0.01, that's a legitimate finding about the current cost/success-rate parameters worth understanding, not something to paper over by widening the range further without questioning it.
 
 ## Architecture
 
@@ -45,6 +67,8 @@ The pipeline drops rows with a missing customer ID, nets cancellations against t
 
 ```
 churn-profit-opt/
+├── .streamlit/
+│   └── config.toml               # Explicit theme, so the app doesn't depend on OS/browser dark-mode
 ├── config.py                    # All constants, paths, financial parameters
 ├── requirements.txt
 ├── .gitignore

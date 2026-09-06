@@ -16,27 +16,28 @@ from src.evaluation.profit_optimizer import compute_expected_profit, compute_avg
 
 st.set_page_config(page_title="Churn Ledger", layout="wide", initial_sidebar_state="expanded")
 
-PAPER = "#ECE7DC"
-PANEL = "#F5F2E9"
-INK = "#23241F"
-INK_SOFT = "#5B5A4E"
-LINE = "#C9C2AE"
-PROFIT = "#2F6B4F"
-PROFIT_SOFT = "#DCE6DD"
-LOSS = "#9C4A34"
-LOSS_SOFT = "#EFDDD5"
+BG = "#142822"
+PANEL = "#1B342C"
+PANEL_RAISED = "#20241C"
+INK = "#F1E9D8"
+INK_SOFT = "#B9C4B7"
+LINE = "#3A5449"
+GOLD = "#D3A94B"
+GOLD_SOFT = "#2E2A18"
+LOSS = "#E07A5F"
+LOSS_SOFT = "#3A211B"
 
 THEME_CSS = f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-html, body, [class*="css"] {{
+html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] * {{
     font-family: 'IBM Plex Sans', sans-serif;
     color: {INK};
 }}
 
-.stApp {{
-    background-color: {PAPER};
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {{
+    background-color: {BG};
 }}
 
 #MainMenu, footer, header {{ visibility: hidden; }}
@@ -47,9 +48,13 @@ div[data-testid="stToolbar"] {{ visibility: hidden; }}
     max-width: 1180px;
 }}
 
-h1, h2, h3 {{
+h1, h2, h3, h4, h5, h6 {{
     font-family: 'Source Serif 4', serif;
     font-weight: 600;
+    color: {INK};
+}}
+
+p, span, div, label, li {{
     color: {INK};
 }}
 
@@ -59,6 +64,7 @@ h1, h2, h3 {{
     font-size: 2.1rem;
     margin-bottom: 0.1rem;
     letter-spacing: -0.01em;
+    color: {INK};
 }}
 
 .ledger-subtitle {{
@@ -77,7 +83,7 @@ h1, h2, h3 {{
 
 .section-label {{
     font-size: 0.82rem;
-    color: {INK_SOFT};
+    color: {INK_SOFT} !important;
     border-bottom: 1px solid {LINE};
     padding-bottom: 0.35rem;
     margin-bottom: 0.9rem;
@@ -99,7 +105,7 @@ h1, h2, h3 {{
 
 .stat-card .label {{
     font-size: 0.78rem;
-    color: {INK_SOFT};
+    color: {INK_SOFT} !important;
     margin-bottom: 0.3rem;
 }}
 
@@ -107,10 +113,11 @@ h1, h2, h3 {{
     font-family: 'IBM Plex Mono', monospace;
     font-size: 1.5rem;
     font-weight: 500;
+    color: {INK};
 }}
 
-.stat-card.profit .value {{ color: {PROFIT}; }}
-.stat-card.loss .value {{ color: {LOSS}; }}
+.stat-card.profit .value {{ color: {GOLD} !important; }}
+.stat-card.loss .value {{ color: {LOSS} !important; }}
 
 .decision-badge {{
     display: inline-block;
@@ -121,13 +128,13 @@ h1, h2, h3 {{
 }}
 
 .decision-badge.intervene {{
-    color: {PROFIT};
-    background-color: {PROFIT_SOFT};
-    border-color: {PROFIT};
+    color: {GOLD} !important;
+    background-color: {GOLD_SOFT};
+    border-color: {GOLD};
 }}
 
 .decision-badge.hold {{
-    color: {LOSS};
+    color: {LOSS} !important;
     background-color: {LOSS_SOFT};
     border-color: {LOSS};
 }}
@@ -137,6 +144,7 @@ h1, h2, h3 {{
     border: 1px solid {LINE};
     padding: 1.2rem 1.3rem;
     margin-bottom: 1.2rem;
+    color: {INK};
 }}
 
 .breakdown-row {{
@@ -145,6 +153,7 @@ h1, h2, h3 {{
     padding: 0.4rem 0;
     border-bottom: 1px dashed {LINE};
     font-size: 0.92rem;
+    color: {INK};
 }}
 
 .breakdown-row:last-child {{
@@ -160,17 +169,19 @@ h1, h2, h3 {{
 .formula-panel {{
     background-color: {PANEL};
     border: 1px solid {LINE};
-    border-left: 3px solid {INK};
+    border-left: 3px solid {GOLD};
     padding: 1rem 1.2rem;
     margin: 0.8rem 0;
+    color: {INK};
 }}
 
 .insight-line {{
-    border-left: 3px solid {PROFIT};
-    background-color: {PROFIT_SOFT};
+    border-left: 3px solid {GOLD};
+    background-color: {GOLD_SOFT};
     padding: 0.7rem 1rem;
     font-size: 0.95rem;
     margin: 0.6rem 0 1.2rem 0;
+    color: {INK};
 }}
 
 div[data-baseweb="tab-list"] {{
@@ -181,38 +192,51 @@ div[data-baseweb="tab-list"] {{
 button[data-baseweb="tab"] {{
     font-family: 'IBM Plex Sans', sans-serif;
     font-size: 0.95rem;
-    color: {INK_SOFT};
+    color: {INK_SOFT} !important;
     padding-bottom: 0.6rem;
+    background-color: transparent;
+}}
+
+button[data-baseweb="tab"] p {{
+    color: {INK_SOFT} !important;
 }}
 
 button[data-baseweb="tab"][aria-selected="true"] {{
-    color: {INK};
+    color: {GOLD} !important;
+    font-weight: 600;
+}}
+
+button[data-baseweb="tab"][aria-selected="true"] p {{
+    color: {GOLD} !important;
     font-weight: 600;
 }}
 
 div[data-baseweb="tab-highlight"] {{
-    background-color: {INK} !important;
+    background-color: {GOLD} !important;
     height: 2px !important;
 }}
 
 .stButton>button, .stDownloadButton>button {{
-    background-color: {INK};
-    color: {PAPER};
+    background-color: {GOLD};
+    color: {BG} !important;
     border-radius: 0;
     border: none;
     font-family: 'IBM Plex Sans', sans-serif;
-    font-weight: 500;
+    font-weight: 600;
     padding: 0.5rem 1.2rem;
 }}
 
+.stButton>button *, .stDownloadButton>button * {{ color: {BG} !important; }}
+
 .stButton>button:hover, .stDownloadButton>button:hover {{
-    background-color: {INK_SOFT};
-    color: {PAPER};
+    background-color: {INK};
+    color: {BG} !important;
 }}
 
 section[data-testid="stSidebar"] {{
-    background-color: {PANEL};
+    background-color: {PANEL_RAISED};
     border-right: 1px solid {LINE};
+    color: {INK};
 }}
 
 section[data-testid="stSidebar"] .block-container {{
@@ -224,6 +248,7 @@ section[data-testid="stSidebar"] .block-container {{
     font-size: 1.15rem;
     font-weight: 600;
     margin-bottom: 0.9rem;
+    color: {GOLD} !important;
 }}
 
 .sidebar-row {{
@@ -232,10 +257,12 @@ section[data-testid="stSidebar"] .block-container {{
     font-size: 0.85rem;
     padding: 0.35rem 0;
     border-bottom: 1px dashed {LINE};
+    color: {INK} !important;
 }}
 
 .sidebar-row .val {{
     font-family: 'IBM Plex Mono', monospace;
+    color: {INK} !important;
 }}
 
 .legend-swatch {{
@@ -244,6 +271,15 @@ section[data-testid="stSidebar"] .block-container {{
     height: 0.7rem;
     margin-right: 0.4rem;
     vertical-align: middle;
+}}
+
+code {{
+    background-color: {GOLD_SOFT} !important;
+    color: {GOLD} !important;
+}}
+
+[data-testid="stDataFrame"] {{
+    border: 1px solid {LINE};
 }}
 </style>
 """
@@ -319,9 +355,9 @@ def render_threshold_chart(threshold_df, optimal_threshold):
         x=threshold_df["threshold"],
         y=threshold_df["net_profit"],
         mode="lines",
-        line=dict(color=INK, width=2),
+        line=dict(color=GOLD, width=2),
         fill="tozeroy",
-        fillcolor="rgba(47,107,79,0.12)",
+        fillcolor="rgba(211,169,75,0.15)",
         name="Net profit"
     ))
     optimal_row = threshold_df[threshold_df["threshold"] == optimal_threshold]
@@ -330,7 +366,7 @@ def render_threshold_chart(threshold_df, optimal_threshold):
             x=optimal_row["threshold"],
             y=optimal_row["net_profit"],
             mode="markers",
-            marker=dict(color=PROFIT, size=10, line=dict(color=INK, width=1)),
+            marker=dict(color=GOLD, size=10, line=dict(color=INK, width=1)),
             name="Optimal threshold"
         ))
     fig.update_layout(
@@ -339,8 +375,8 @@ def render_threshold_chart(threshold_df, optimal_threshold):
         font=dict(family="IBM Plex Sans", color=INK, size=13),
         margin=dict(l=10, r=10, t=10, b=10),
         showlegend=False,
-        xaxis=dict(title="Threshold", gridcolor=LINE, zeroline=False),
-        yaxis=dict(title="Net profit (£)", gridcolor=LINE, zeroline=True, zerolinecolor=LINE),
+        xaxis=dict(title="Threshold", gridcolor=LINE, zeroline=False, color=INK),
+        yaxis=dict(title="Net profit (£)", gridcolor=LINE, zeroline=True, zerolinecolor=LINE, color=INK),
         height=340
     )
     return fig
@@ -350,6 +386,13 @@ def style_shap_figure(fig):
     fig.patch.set_facecolor(PANEL)
     for ax in fig.axes:
         ax.set_facecolor(PANEL)
+        ax.tick_params(colors=INK)
+        ax.xaxis.label.set_color(INK)
+        ax.yaxis.label.set_color(INK)
+        for spine in ax.spines.values():
+            spine.set_color(LINE)
+        for text_obj in ax.texts:
+            text_obj.set_color(INK)
     return fig
 
 
@@ -375,7 +418,7 @@ with st.sidebar:
     st.markdown(
         f"""
         <div style="font-size:0.85rem; line-height:1.6; color:{INK_SOFT};">
-        <span class="legend-swatch" style="background-color:{PROFIT};"></span>Intervene — expected profit is positive.<br>
+        <span class="legend-swatch" style="background-color:{GOLD};"></span>Intervene — expected profit is positive.<br>
         <span class="legend-swatch" style="background-color:{LOSS};"></span>Do not intervene — expected profit is negative.
         </div>
         """,
@@ -515,6 +558,11 @@ with tab1:
                 explanation = compute_shap_explanation(explainer, input_df, display_names)
 
                 mpl.rcParams["font.family"] = "sans-serif"
+                mpl.rcParams["text.color"] = INK
+                mpl.rcParams["axes.labelcolor"] = INK
+                mpl.rcParams["axes.edgecolor"] = LINE
+                mpl.rcParams["xtick.color"] = INK
+                mpl.rcParams["ytick.color"] = INK
                 fig, ax = plt.subplots(figsize=(5, 3.2))
                 import shap
                 shap.waterfall_plot(explanation, show=False)
@@ -533,7 +581,7 @@ with tab2:
         comparison_df = pd.read_csv(COMPARISON_PATH)
 
         st.markdown('<div class="section-label">Baseline comparison</div>', unsafe_allow_html=True)
-        st.dataframe(comparison_df, hide_index=True, use_container_width=True)
+        st.dataframe(comparison_df, hide_index=True, width='stretch')
 
         default_profit = float(
             comparison_df[comparison_df["Strategy"] == "Default Threshold (0.5)"]["Net Campaign Profit"]
@@ -543,11 +591,23 @@ with tab2:
             comparison_df[comparison_df["Strategy"] == "Profit-Optimized"]["Net Campaign Profit"]
             .str.replace("£", "", regex=False).str.replace(",", "", regex=False).values[0]
         )
-        lift_pct = ((optimal_profit - default_profit) / default_profit) * 100
+        profit_delta = optimal_profit - default_profit
+
+        if default_profit > 0:
+            lift_pct = (profit_delta / default_profit) * 100
+            insight_text = (
+                f"The profit-optimized threshold lifts net profit by {lift_pct:.1f}% "
+                f"over the default 0.5 cutoff."
+            )
+        else:
+            insight_text = (
+                f"The profit-optimized threshold changes net profit by £{profit_delta:,.0f} "
+                f"versus the default 0.5 cutoff (percentage lift isn't meaningful when the "
+                f"baseline is zero or negative)."
+            )
 
         st.markdown(
-            f'<div class="insight-line">The profit-optimized threshold lifts net profit by '
-            f'{lift_pct:.1f}% over the default 0.5 cutoff.</div>',
+            f'<div class="insight-line">{insight_text}</div>',
             unsafe_allow_html=True
         )
 
@@ -556,7 +616,7 @@ with tab2:
             optimal_threshold = threshold_df.loc[threshold_df["net_profit"].idxmax(), "threshold"]
 
             st.markdown('<div class="section-label">Threshold sweep</div>', unsafe_allow_html=True)
-            st.plotly_chart(render_threshold_chart(threshold_df, optimal_threshold), use_container_width=True)
+            st.plotly_chart(render_threshold_chart(threshold_df, optimal_threshold), width='stretch')
             st.caption("Net profit at each candidate threshold. The marker sits at the argmax.")
     else:
         st.info("Profit comparison data not found. Run 'python scripts/run_pipeline.py' first.")
@@ -699,7 +759,7 @@ with tab4:
                     "expected_profit": "£{:,.2f}",
                     "monetary_total": "£{:,.2f}"
                 }),
-                use_container_width=True
+                width='stretch'
             )
 
             st.markdown('<div class="section-label">2 · Export</div>', unsafe_allow_html=True)
