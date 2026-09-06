@@ -1,67 +1,92 @@
 # Customer Churn Prediction with Profit Optimization
 
-Predicting customer churn for non-contractual e-commerce using RFM features, calibrated XGBoost probabilities, and a cost-sensitive decision threshold that maximizes net campaign profit.
+Given a customer transaction history, this pipeline predicts churn probability, calibrates it into a true probability, and turns that into a per-customer INTERVENE / DO NOT INTERVENE call based on whether the expected financial gain of a retention offer exceeds its cost, never a raw probability cutoff alone.
 
-## Problem Statement
+Built entirely on free, open infrastructure: the public [Online Retail II](https://archive.ics.uci.edu/dataset/502/online+retail+ii) dataset, open-source libraries (XGBoost, Optuna, scikit-learn, Streamlit), no paid APIs, no GPU required.
 
-Standard classification metrics assume false positives and false negatives carry equal cost. In churn intervention, offering a retention discount to a customer who would have stayed anyway burns budget. Failing to catch a churning customer loses revenue. Maximizing ROC-AUC or F1 ignores this asymmetry.
+## Preview
 
-This project replaces default 0.5 thresholding with an expected-value framework: the optimal threshold is the one that maximizes net profit after accounting for intervention cost, retention offer success rate, and the revenue at stake. Every customer receives an "INTERVENE" or "DO NOT INTERVENE" recommendation based strictly on whether the expected financial gain exceeds the intervention cost.
+<p align="center">
+  <img src="assets/manual_entry.png" width="720" alt="Streamlit dashboard showing manual RFM feature entry with sliders and number inputs, a four-stat result row, and a SHAP waterfall explanation">
+  <br>
+  <sub><em>Single Prediction, manual feature entry: churn probability, expected profit, the INTERVENE/DO NOT INTERVENE call, and a per-feature SHAP explanation for it.</em></sub>
+</p>
 
-## Dashboard Preview
+## What this is
 
-### Single Prediction, Manual Feature Entry
-![Manual Feature Entry](assets/manual_entry.png)
+Given the raw transaction file, the pipeline:
 
-### Single Prediction, Customer ID Lookup
-![Customer ID Lookup](assets/customer_lookup.png)
-
-### Batch Analysis, Profit Comparison
-![Batch Analysis](assets/batch_analysis.png)
-
-### Model Info
-![Model Info](assets/model_info.png)
-
-### Batch Export, Intervention List
-![Batch Export](assets/batch_export.png)
-
-## Bug Fixes in This Revision
-
-A full code audit (not just a prose pass) found and fixed five real bugs beyond the validation leak in [Key Results](#key-results). Each is covered by a regression test.
-
-- **Cancellation netting corrupted unrelated line items** (`src/data/cleaner.py`). A cancellation was matched to a specific `(invoice, customer_id, stockcode)`, but the quantity correction was applied indexed by invoice number alone. Since one invoice can carry several stockcodes, the cancelled quantity was subtracted from every line on that invoice, not just the matched one. Fixed by indexing the correction on `(invoice, stockcode)`. Covered by `tests/test_cleaner.py`.
-- **That same code path referenced a column that doesn't exist.** The merge that matches cancellations to transactions never produces a `quantity_cancel` column (only one side of the join has a `quantity` column, so pandas never suffixes it). On real data with any matched cancellation, this raised a `KeyError` and the pipeline never actually completed a run with the netting logic in place. Fixed alongside the point above.
-- **The 3-month revenue horizon silently collapsed to the full 12-month total.** The dashboard computed `avg_monthly_spend = monetary_total / MONTHS_REVENUE_SAVED`, then `revenue_saved = avg_monthly_spend * MONTHS_REVENUE_SAVED`. The division and multiplication by the same constant cancel out exactly, so "3 months of revenue at stake" was actually each customer's entire 12-month spend, a 4x overstatement for any customer with 3 or more orders. The training pipeline used yet a third, different figure (`monetary_avg`, mean revenue per line item) for the same concept, so the threshold chosen during training wasn't even calibrated against what the dashboard used at serving time. Fixed with one shared `compute_avg_monthly_spend()` in `src/evaluation/profit_optimizer.py`, used identically by `scripts/run_pipeline.py` and `app/app.py`.
-- **`seasonal_dropoff` was silently always 0 for about 75% of windows.** It compared calendar-Q4 date ranges, but those ranges frequently fall outside the 365-day observation window the feature is computed on. Whenever the window's reference date fell before October, the comparison period was mathematically guaranteed to be missing from the data. Redefined as a relative 90-day/180-day comparison that always fits inside the observation window regardless of calendar month. Covered by `tests/test_rfm_engineer.py`.
-- **Manual feature entry built its model input by position, not by name.** It happened to match the model's actual feature order today, but nothing enforced that; a reorder in `rfm_engineer.py` would silently mislabel every value with no error. Now built as a name-keyed dict and reindexed against the model's own `feature_names`, matching the (already-safe) customer-lookup path, and fails loudly if a feature is missing instead of mislabeling it.
-- **Batch Export's on-screen message didn't match its logic.** It told users scoring would use "the optimal threshold from training," but the code actually used per-customer expected value, which is the intentional, documented design (see Key Design Decisions). The message was inaccurate, not the logic. Fixed the message.
-- **The cancellation fix above had two further edge cases that were still wrong on a second pass.** When two line items shared the exact same `(invoice, stockcode)` (duplicate lines, which occur in this dataset), the correction subtracted the cancelled quantity from every duplicate independently instead of netting once across them, over-cancelling. Deeper still, the join itself was the root cause: when the transactions side had duplicate `(invoice, customer_id, stockcode)` keys, a single cancellation record matched multiple transaction rows and got summed as if it were multiple separate cancellations, inflating the netted amount before any row-level logic even ran. Fixed by deduplicating the join key before matching, then netting sequentially across any remaining duplicate rows within a matched group. Covered by `test_duplicate_line_items_are_netted_not_double_cancelled` and `test_two_line_cancellation_against_same_product_sums_correctly`.
-- **That same fix was also impractically slow at real scale.** The corrected logic ran a Python-level function over every `(invoice, stockcode)` group in the dataset, not just the ones with a matched cancellation. On a 300K-row synthetic test this didn't finish in a reasonable time; the real dataset is roughly 3-4x that size. Fixed by splitting the affected (matched) rows from the unaffected majority up front, running the row-by-row netting logic only on the small affected subset, and passing the rest through untouched. A 1M-row benchmark with 10,000 cancellations now completes in about 47 seconds.
-- **The validation set was reused for tuning, calibration, and final reporting all at once.** Optuna's hyperparameter search directly optimized PR-AUC on the same set that was then used to fit the isotonic calibrator, compute the reported PR-AUC and Brier score, and select the profit-optimal threshold. Since the model's hyperparameters were chosen specifically to score well on that set, reporting performance on it again is optimistic by construction, the classic "tuning on the test set" problem, separate from the customer-overlap leak already described above. Fixed with a proper three-way customer-grouped split: `train` fits the model, `val` is Optuna's tuning target only, and `test` is held out completely from tuning and touched exactly once, for calibration and final reporting. Covered by `tests/test_grouped_split.py`, which now verifies pairwise disjointness across all three sets, not just two.
-- **The formula panel in Model Info didn't nest correctly.** A styled `<div>` was opened in one `st.markdown()` call and closed in a separate call with `st.latex()` in between. Streamlit renders each call as an isolated block, so HTML can't be split across calls like that; the div would auto-close empty and the formula would render outside it, unstyled. Fixed by rendering the formula as a single self-contained HTML block instead of relying on `st.latex()`.
-- **A Streamlit API version mismatch, corrected twice.** First pass: `width='stretch'` was used in some dataframe calls while `use_container_width=True` was used elsewhere, and since I couldn't verify which was actually safe at the time, I standardized on `use_container_width=True` on the assumption that `width=` might not exist on the `streamlit>=1.25.0` floor this project pinned. That assumption turned out to be overly cautious: a real run's logs showed the installed Streamlit version emitting a deprecation warning that explicitly recommends replacing `use_container_width` with `width='stretch'`, meaning `width=` was actually the safe, current, non-deprecated choice, and `use_container_width` was itself the one on its way out. Reversed course: switched to `width='stretch'` throughout and raised the `requirements.txt` floor to `streamlit>=1.40.0`, an evidence-based floor rather than a guess. If you're on an older pinned Streamlit for other reasons, `use_container_width=True` still works there today, just with a deprecation warning in the logs.
-- **The dashboard's text was largely illegible: pale, near-invisible on a pale background.** Real screenshots from an actual run showed the sidebar, several info panels, and the threshold chart rendering in washed-out ghost text. The root cause: several CSS classes and raw HTML elements never set an explicit text color, relying on inheritance, and Streamlit's own default text color (driven by the user's OS/browser dark-mode preference when no theme is explicitly configured) doesn't reliably cascade the way a plain `body { color: ... }` rule expects. Fixed at the root with `.streamlit/config.toml`, which explicitly sets the app's theme so it no longer depends on the visitor's OS or browser dark-mode setting, and gave every custom HTML element its own explicit color rather than relying on inheritance.
-- **The palette itself was replaced.** The previous pale stone-paper theme read as generic. Replaced with a dark "ledger book" palette (bottle green, brass gold, oxblood) that's thematically grounded in the project (a financial ledger) and visually distinct from both common AI-generated palette clichés. Every foreground/background pairing was checked against WCAG AA contrast requirements (all pass, 4.6:1 or higher) before shipping, not assumed.
-- **A leftover variable rename caused a `NameError` waiting to happen.** During the palette rewrite, two inline styles in the sidebar still referenced the old palette variable name (`PROFIT`) that no longer existed after the rename to `GOLD`. Caught by grepping for stale references and fixed before it could crash the sidebar on first load.
-- **A real crash bug, found only by actually executing the app, not by reading the code.** `ZeroDivisionError` in the Batch Analysis tab: `lift_pct = (optimal_profit - default_profit) / default_profit * 100` has no guard against `default_profit` being exactly zero, which happens whenever the default-threshold (0.5) baseline strategy nets zero profit, a real, reachable state depending on the data and cost parameters. This would take down the whole app, not just that tab, since the calculation runs unconditionally on every script rerun regardless of which tab is visible. Found using Streamlit's own `AppTest` headless testing framework, which actually executes the script and every button-click flow end to end rather than just reading the source. Fixed by falling back to an absolute profit delta (with a clear caveat) whenever the baseline is zero or negative, since a percentage lift over a zero or negative base isn't a meaningful number anyway.
-- **The reported "optimal threshold" was an artifact of an arbitrary search boundary, not a true optimum.** A real pipeline run (dataset owner's own logs) reported `Optimal threshold: 0.1`, and the threshold sweep chart showed net profit still strictly decreasing all the way to that value with no interior peak, meaning the true optimum was being cut off by the hardcoded lower bound of the search grid (`np.arange(0.1, 0.91, 0.01)`), not found by it. Widened the default search range's lower bound to 0.01 in `find_optimal_threshold` (`src/evaluation/profit_optimizer.py`) so the reported optimum reflects a genuine argmax rather than a boundary artifact. This is a search-range bug, not a claim about what the "correct" threshold should be; if profit is still rising at 0.01, that's a legitimate finding about the current cost/success-rate parameters worth understanding, not something to paper over by widening the range further without questioning it.
+1. Cleans it, drops rows with no customer ID, nets cancellations against the specific line item they credit (not the whole invoice), keeps only positive quantities and prices.
+2. Builds sliding observation/prediction windows per customer, so the same customer contributes multiple labeled examples across different points in time, not one static snapshot.
+3. Engineers 12 RFM-based features per customer per window, and labels churn by whether the customer bought again in the following 90 days.
+4. Tunes XGBoost with Optuna against a customer-grouped validation split, then calibrates and reports on a customer-grouped test split that tuning never saw.
+5. Sweeps decision thresholds to find the one that maximizes net campaign profit, not the one that maximizes accuracy.
+6. Serves all of this through a Streamlit dashboard: single-customer lookup, batch scoring, and a downloadable intervention list, every recommendation traceable back to the expected-value formula behind it.
 
 ## Architecture
 
-- **Sliding temporal windows** prevent data leakage at the transaction level. A 12-month observation window, 90-day prediction window, and 30-day slide interval generate multiple training examples per customer across different seasonal periods.
-- **Customer-grouped train/validation/test split** prevents leakage at the customer level. `GroupShuffleSplit`, keyed on `customer_id`, guarantees that no customer's windows cross a split boundary (`src/modeling/trainer.py`). This is a three-way split, not two: `train` fits the model, `val` is Optuna's tuning target, and `test` is held out completely from tuning and used only once, for calibration and final reporting. An earlier version of this pipeline split randomly across the concatenated feature matrix, which let the same customer appear in both sets through different windows; see [Bug Fixes in This Revision](#bug-fixes-in-this-revision) for what changed, including why a two-way split wasn't enough on its own.
-- **Unweighted XGBoost** trained on the natural class imbalance preserves the true base churn rate. No SMOTE, no scale_pos_weight.
-- **Isotonic regression** calibrates raw model scores into true probabilities, a strict requirement for valid expected-value calculations.
-- **Profit optimizer** sweeps thresholds from 0.10 to 0.90, computes expected net profit at each step, and selects the argmax.
-- **Batch export** generates a downloadable intervention list for campaign tools, with per-customer financial justification.
+```mermaid
+flowchart TD
+    raw[online_retail_II.xlsx] --> clean[Cleaner\nmissing IDs dropped, cancellations netted per line item]
+    clean --> windows[Sliding windows\n365d observation / 90d prediction / 30d slide]
+    windows --> features[RFM feature engineer\n12 features per customer per window]
+    features --> split[Customer-grouped split\ntrain / val / test, no customer crosses a boundary]
+    split -->|train| tune[XGBoost + Optuna\n50 trials, tuned against val only]
+    split -->|val| tune
+    tune --> calibrate[Isotonic calibration\nfit on test]
+    split -->|test, untouched by tuning| calibrate
+    calibrate --> metrics[PR-AUC / Brier\non test]
+    calibrate --> profit[Profit optimizer\nthreshold sweep + baselines]
+    profit --> artifacts[(models/ + data/processed/)]
+    artifacts --> dashboard[Streamlit dashboard\nSingle Prediction, Batch Analysis, Model Info, Batch Export]
+```
+
+`scripts/check_threshold_floor.py` runs a reduced path through this same architecture: it reloads the saved model and calibrator, reproduces the identical train/val/test split (deterministic given the fixed `RANDOM_SEED`), and re-sweeps thresholds alone, skipping cleaning, windowing, feature engineering, and tuning entirely. That's only possible because the split is reproducible by construction, not incidental.
+
+## Expected Value Framework
+
+```
+E[Profit] = P(churn) * (intervention_success_rate * avg_monthly_spend * 3 months) - intervention_cost
+```
+
+`avg_monthly_spend` is each customer's `monetary_total` (revenue across the full 12-month observation window) divided by the number of months that window spans, computed once by `compute_avg_monthly_spend()` in `src/evaluation/profit_optimizer.py` and used identically during training and at serving time, never two different figures for the same concept in different places.
+
+A customer is targeted only when expected profit is positive. A customer with a high churn probability but low monthly spend can still be correctly flagged DO NOT INTERVENE, because the expected return doesn't clear the intervention cost. This is the core difference from thresholding on probability alone.
+
+## Models
+
+| Role | Model | Library | Notes |
+|---|---|---|---|
+| Churn classifier | XGBoost (`XGBClassifier`) | `xgboost` | Trained on the natural class imbalance. No SMOTE, no `scale_pos_weight`; post-hoc calibration corrects score distortion instead. |
+| Hyperparameter search | TPE sampler (Optuna's default) | `optuna` | 50 trials, objective is validation-set PR-AUC only. Never sees the test set, by construction (see Guardrails). |
+| Calibration | Isotonic regression | `scikit-learn` | Default; Platt scaling (`LogisticRegression`) is available via `CALIBRATION_METHOD` in `config.py`. Fit on the test set, converts raw scores into the true probabilities the profit formula requires. |
+| Explainability | SHAP `TreeExplainer` | `shap` | Per-customer waterfall plot in the dashboard only. Never touches training, tuning, or thresholding. |
+
+The same isolation principle that keeps an eval judge structurally separate from what it's judging applies here between the validation and test splits: the set that picks the hyperparameters is never the set the final numbers get reported on.
+
+## Guardrails
+
+- **Split integrity is asserted, not assumed.** `grouped_train_val_test_split()` (`src/modeling/trainer.py`) asserts pairwise customer disjointness across train/val/test on every call; a regression here fails loudly in `tests/test_grouped_split.py`, not silently in a reported number.
+- **The test set is touched exactly once.** Used only for calibration and final metrics, never for tuning. This project reports real numbers only when it can trace them to an actual run against real data, not a placeholder carried over from a leaky split (see Evaluation).
+- **Cancellation netting is scoped, not global.** A cancellation only decrements the specific `(invoice, stockcode)` it matches, verified against duplicate-line-item and multi-cancellation edge cases in `tests/test_cleaner.py`, not just the common case.
+- **Graceful degradation on missing artifacts.** Every dashboard tab checks for its required model/data files before using them and shows a clear "run the pipeline first" message instead of a raw traceback.
+- **Graceful degradation on a zero or negative baseline.** The profit-lift calculation in Batch Analysis falls back to an absolute currency delta instead of dividing by zero or reporting a nonsensical percentage over a negative base.
+
+## Artifacts
+
+`scripts/run_pipeline.py` persists everything the dashboard needs to `models/` (`xgb_model.pkl`, `calibrator.pkl`, `feature_names.pkl`, `calibration_method.pkl`) and `data/processed/` (`feature_matrix.pkl`, `profit_comparison.csv`, `threshold_analysis.csv`). `app/app.py` only ever reads these; it never retrains.
+
+Re-running the pipeline overwrites all of the above in place. There's no versioning and no run history kept, if you want to compare two configurations, save a copy of `data/processed/` and `models/` before re-running with different `config.py` values.
+
+## Data Integrity
+
+Cancellation matching assumes a credit note's invoice number is the original sale's invoice number with a `C` prefix, since that's the convention this specific dataset follows. This is a mitigation for a known messy-data pattern, not a guarantee: a refund that doesn't follow the convention is simply left unmatched and passes through as a separate negative-quantity row removed by the `quantity > 0` filter. It understates netted revenue in that case rather than corrupting an unrelated row, which was the actual bug this replaced (see the bug log at the bottom of this file).
 
 ## Dataset
 
-[Online Retail II (UCI)](https://archive.ics.uci.edu/dataset/502/online+retail+ii): 1,067,371 raw transactional records from a UK-based online retailer spanning December 2009 to December 2011, combined across both sheets in the source `.xlsx`.
+[Online Retail II (UCI)](https://archive.ics.uci.edu/dataset/502/online+retail+ii): 1,067,371 raw transactional records from a UK-based online retailer spanning December 2009 to December 2011, combined across both sheets (`Year 2009-2010`, `Year 2010-2011`) in the source `.xlsx`. `src/data/cleaner.py` loads and concatenates both (`load_raw_data`).
 
-**Source:** UCI Machine Learning Repository. Direct download in `.xlsx` format containing two sheets, `Year 2009-2010` and `Year 2010-2011`. `src/data/cleaner.py` loads and concatenates both (`load_raw_data`).
-
-The pipeline drops rows with a missing customer ID, nets cancellations against their matching invoice and stockcode, removes non-positive quantities and prices, and only then computes revenue and RFM features. That cleaning step changes the row count substantially from the raw 1,067,371. Run `python scripts/run_pipeline.py`; it prints the exact post-cleaning count as `Cleaned transactions: <n>`. That figure is intentionally not hardcoded here since it depends on the actual data file in `data/raw/`.
+The post-cleaning row count isn't hardcoded here since it depends on the actual file in `data/raw/`; `scripts/run_pipeline.py` prints it as `Cleaned transactions: <n>`.
 
 ## Project Structure
 
@@ -73,7 +98,8 @@ churn-profit-opt/
 ├── requirements.txt
 ├── .gitignore
 ├── scripts/
-│   └── run_pipeline.py          # End-to-end training and evaluation script
+│   ├── run_pipeline.py          # End-to-end training and evaluation script
+│   └── check_threshold_floor.py # Reuses saved artifacts to re-sweep thresholds without retraining
 ├── src/
 │   ├── data/
 │   │   ├── cleaner.py           # Missing ID removal, invoice+stockcode cancellation netting
@@ -90,11 +116,11 @@ churn-profit-opt/
 ├── app/
 │   └── app.py                   # Streamlit interactive dashboard
 ├── tests/
-│   ├── test_temporal.py
-│   ├── test_rfm_engineer.py
-│   ├── test_profit_optimizer.py
-│   ├── test_grouped_split.py
-│   └── test_cleaner.py
+│   ├── test_temporal.py         # sliding window boundaries + churn label correctness
+│   ├── test_rfm_engineer.py     # RFM aggregation math, seasonal_dropoff across all calendar months
+│   ├── test_profit_optimizer.py # threshold sweep, argmax, compute_avg_monthly_spend scaling
+│   ├── test_grouped_split.py    # pairwise train/val/test disjointness, every row assigned once
+│   └── test_cleaner.py          # cancellation netting, duplicate line items, multi-cancellation sums
 ├── data/
 │   ├── raw/                     # Place online_retail_II.xlsx here
 │   └── processed/               # Generated feature matrices and results
@@ -102,136 +128,77 @@ churn-profit-opt/
 └── assets/                      # Dashboard assets for README
 ```
 
-## Setup
+## Getting started
 
-**1. Clone and create environment:**
-```bash
-git clone <repo-url>
-cd churn-profit-opt
-python -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
-```
+1. **Get the dataset:** download `online_retail_II.xlsx` from the [UCI repository](https://archive.ics.uci.edu/dataset/502/online+retail+ii) and place it in `data/raw/`.
 
-**2. Download the dataset:**
-Download `online_retail_II.xlsx` from the [UCI repository](https://archive.ics.uci.edu/dataset/502/online+retail+ii) and place it in `data/raw/`.
+2. **Install:**
+   ```bash
+   git clone <repo-url>
+   cd churn-profit-opt
+   python -m venv venv
+   source venv/bin/activate  # or venv\Scripts\activate on Windows
+   pip install -r requirements.txt
+   ```
 
-**3. Run the pipeline:**
-```bash
-python scripts/run_pipeline.py
-```
-This executes cleaning, window generation, feature engineering, hyperparameter tuning (50 Optuna trials against a held-out validation split), the customer-grouped train/validation/test split, calibration and final reporting on a test split Optuna never saw, and profit optimization. Serialized model artifacts are saved to `models/`. Processed data and comparison results are saved to `data/processed/`.
+3. **Review `config.py` (optional).** You don't need to touch it for a first run, but every financial and windowing assumption lives there:
 
-**4. Run the tests:**
-```bash
-pytest tests/ -v
-```
+   | Parameter | Default | Description |
+   |---|---|---|
+   | `OBSERVATION_WINDOW_DAYS` | 365 | Length of observation window |
+   | `PREDICTION_WINDOW_DAYS` | 90 | Churn lookahead period |
+   | `SLIDE_INTERVAL_DAYS` | 30 | Step size for sliding windows |
+   | `COST_OF_OFFER` | 10.0 | Cost per retention intervention (£) |
+   | `INTERVENTION_SUCCESS_RATE` | 0.15 | Fraction of churners who accept the offer |
+   | `MONTHS_REVENUE_SAVED` | 3 | Revenue horizon if customer is retained |
+   | `OPTUNA_TRIALS` | 50 | Number of hyperparameter search trials |
+   | `CALIBRATION_METHOD` | isotonic | isotonic or platt |
+   | `VALIDATION_SIZE` | 0.2 | Fraction of customers used for Optuna's tuning objective |
+   | `TEST_SIZE` | 0.2 | Fraction of customers held out completely from tuning |
 
-**5. Launch the dashboard:**
-```bash
-streamlit run app/app.py
-```
-
-## Key Results
-
-The previous revision of this README reported PR-AUC 0.909, Brier score 0.135, an optimal threshold of 0.76, and a profit table built from a validation split that was random across the concatenated sliding-window feature matrix. That split let the same customer appear in both train and validation through different windows, which inflates every downstream number since the model could partly memorize customers it was evaluated on.
-
-The split has been replaced with a customer-grouped, three-way split (`grouped_train_val_test_split` in `src/modeling/trainer.py`): train fits the model, validation is Optuna's tuning target, and test is held out completely from tuning and used only once, for calibration and final reporting. This closes two separate issues, not one: the original customer-overlap leak described above, and a second, independent problem found on a later audit pass, where the same validation set used for tuning was also being used to calibrate and report final metrics ("tuning on the test set"), which is optimistic regardless of the customer-overlap question. Both are verified by `tests/test_grouped_split.py`, which checks pairwise disjointness across all three sets and that every row lands in exactly one of them. That fix is in code and covered by tests, but this environment does not have network access to the UCI dataset, so the pipeline could not actually be re-run against the real file to regenerate PR-AUC, Brier score, the optimal threshold, or the profit comparison table. The old numbers are removed rather than left in place, since they were produced by the leaky split and would misrepresent the corrected pipeline.
-
-To regenerate this table, run `python scripts/run_pipeline.py` end to end and copy the printed PR-AUC, Brier score, optimal threshold, and `data/processed/profit_comparison.csv` into this section. Expect PR-AUC and net profit to come in lower than the previous figures: the corrected split removes two separate sources of inflation, it does not add information.
-
-## Dashboard Features
-
-Four tabs provide a complete analytical and operational interface:
-
-**Single Prediction:**
-- Manual RFM feature entry with sliders or customer ID lookup from the processed feature matrix.
-- Four-stat summary row: calibrated churn probability, expected profit, INTERVENE/DO NOT INTERVENE recommendation, and revenue at stake.
-- Side-by-side financial breakdown and SHAP waterfall plot (`src/evaluation/explainability.py`, rendered via `shap.waterfall_plot`).
-- Financial breakdown shows all components of the expected value calculation explicitly.
-
-**Batch Analysis:**
-- Profit comparison table across random, default threshold, and profit-optimized strategies.
-- Profit lift percentage relative to the default threshold baseline.
-- Threshold sweep chart visualizing net profit across the full threshold range, with the optimum marked.
-
-**Model Info:**
-- Three-column layout: architecture overview, feature descriptions, and configurable parameters.
-- Profit formula displayed with LaTeX rendering.
-
-**Batch Export:**
-- One-click scoring of all customers using their latest observation window.
-- Summary stats: total customers, intervene count, do-not-intervene count, total expected profit.
-- Top 50 intervention candidates displayed by expected profit.
-- Download the full intervention list as CSV for campaign tool import.
-- Download the complete scored dataset for CRM integration or further analysis.
-
-## Expected Value Framework
-
-The profit calculation for each customer:
-
-```
-E[Profit] = P(churn) * (intervention_success_rate * avg_monthly_spend * 3 months) - intervention_cost
-```
-
-`avg_monthly_spend` is each customer's `monetary_total` (their revenue across the full 12-month observation window) divided by the number of months that window spans, computed once by `compute_avg_monthly_spend()` in `src/evaluation/profit_optimizer.py` and used identically during training and at serving time. It is not `monetary_total / MONTHS_REVENUE_SAVED`, which would cancel out against the `* MONTHS_REVENUE_SAVED` in this formula and silently turn "3 months of revenue" into the full 12 months; see [Bug Fixes in This Revision](#bug-fixes-in-this-revision).
-
-A customer is targeted only when the expected profit is positive. The INTERVENE tag is not based on churn probability alone, it requires the expected financial gain to exceed the intervention cost. A customer with 30% churn probability but low monthly spend will be flagged DO NOT INTERVENE because the expected return is negative. This is the core differentiation from standard threshold-based classification.
-
-## Configurable Parameters
-
-All constants are centralized in `config.py`:
-
-| Parameter | Default | Description |
-|---|---|---|
-| `OBSERVATION_WINDOW_DAYS` | 365 | Length of observation window |
-| `PREDICTION_WINDOW_DAYS` | 90 | Churn lookahead period |
-| `SLIDE_INTERVAL_DAYS` | 30 | Step size for sliding windows |
-| `COST_OF_OFFER` | 10.0 | Cost per retention intervention (£) |
-| `INTERVENTION_SUCCESS_RATE` | 0.15 | Fraction of churners who accept the offer |
-| `MONTHS_REVENUE_SAVED` | 3 | Revenue horizon if customer is retained |
-| `OPTUNA_TRIALS` | 50 | Number of hyperparameter search trials |
-| `CALIBRATION_METHOD` | isotonic | isotonic or platt |
-| `VALIDATION_SIZE` | 0.2 | Fraction of customers used for Optuna's tuning objective |
-| `TEST_SIZE` | 0.2 | Fraction of customers held out completely from tuning, used only for calibration and final reporting |
-
-Modify these to adapt the system to different business assumptions without changing pipeline code.
-
-## Key Design Decisions
-
-- **No SMOTE or class weighting:** Preserves true base churn rate for valid probability outputs. Post-hoc calibration corrects any score distortion from imbalance.
-- **Isotonic over Platt scaling:** Non-parametric calibration handles the non-logistic score distortion typical of XGBoost on imbalanced data.
-- **90-day churn window:** Balances false positive reduction against timely intervention. 30 days is too noisy; 180 days is too late.
-- **Sliding windows over single split:** Prevents seasonal overfitting. E-commerce has strong Q4 effects that a single snapshot cannot capture.
-- **Customer-grouped validation split:** A random row-level split lets a customer's other windows leak into validation. Grouping by `customer_id` removes that leak at the cost of a slightly smaller effective validation set.
-- **PR-AUC over ROC-AUC:** ROC-AUC inflates performance on imbalanced data by rewarding correct ranking of abundant negatives.
-- **Per-customer expected value over aggregate threshold:** The INTERVENE tag uses individual revenue and probability, not a population-level cutoff. This captures heterogeneity in customer value that a single threshold misses.
-
-## Testing
-
-Unit tests live in `tests/` and run offline against small synthetic fixtures, no dataset download required:
-
-| File | Covers |
-|---|---|
-| `test_temporal.py` | Sliding window generation: windows are only produced when the data spans enough time, no observation-window transaction falls outside `[obs_start, obs_end)`, churn labels match prediction-window purchase presence. |
-| `test_rfm_engineer.py` | RFM aggregation per window: recency, frequency, monetary total/avg, unique product counts, and `seasonal_dropoff` computed correctly and consistently across every calendar month. |
-| `test_profit_optimizer.py` | Threshold sweep correctness, argmax selection, the expected-profit formula, and `compute_avg_monthly_spend` scaling correctly instead of collapsing to the full total. |
-| `test_grouped_split.py` | The three-way split: no customer appears in more than one of train/val/test, every row is assigned to exactly one split, split sizes roughly match the configured fractions, and identifier columns are excluded from the feature set. |
-| `test_cleaner.py` | Cancellation netting reduces only the matched `(invoice, stockcode)`, leaves unrelated line items and other invoices untouched, fully-cancelled lines are dropped, duplicate line items are netted correctly instead of double-cancelled, and multiple genuine cancellations against the same product sum correctly. |
-
-33 tests total. Run them with:
+## Running it
 
 ```bash
-pytest tests/ -v
+python scripts/run_pipeline.py     # cleans, tunes XGBoost, calibrates, saves artifacts to models/ and data/processed/
+pytest tests/ -v                   # 33 tests, offline, small synthetic fixtures, no dataset needed
+streamlit run app/app.py           # dashboard; needs the artifacts from the pipeline run above
 ```
 
-## Limitations
+The dashboard has four tabs. **Single Prediction** takes manual RFM input or a customer ID lookup and returns a four-stat result row (churn probability, expected profit, the INTERVENE/DO NOT INTERVENE call, revenue at stake) alongside a SHAP explanation. **Batch Analysis** compares net profit across random, default-threshold, and profit-optimized strategies, with the full threshold sweep charted. **Model Info** documents the architecture, every feature, and the profit formula in one place. **Batch Export** scores every customer at once and produces a downloadable intervention list, each row carrying its own financial justification, plus the full scored dataset for CRM or campaign-tool import.
 
-- Cancellation matching assumes a credit note's invoice number is the original sale's invoice number with a `C` prefix. Orphaned refunds that don't follow this convention, or that reference an invoice outside the current cleaning batch, are left unmatched and simply pass through as separate negative-quantity rows removed by the `quantity > 0` filter, understating netted revenue rather than corrupting it.
-- The three-way split can't stratify by churn label either (same `GroupShuffleSplit` limitation as before), now across three sets instead of two, which shrinks each further. With a few thousand customers this is usually minor, but it has not been measured against the real dataset in this revision.
-- The Key Results numbers are pending a real re-run of the corrected pipeline; see that section for why.
-- `monetary_avg` is the mean revenue per transaction line item, not per order/invoice. A customer with many low-value line items per order and one with few high-value line items can have the same `monetary_avg` despite very different order sizes. The dashboard labels this explicitly to avoid confusion with true average order value.
-- The intervention success rate is a configurable constant, not a learned parameter. In production, this would come from A/B testing.
+## Evaluation
+
+Evaluation here means two different things, and this project doesn't blur them: whether the code is correct (unit tests), and whether the model is actually good (held-out metrics). Conflating them is how leakage bugs like the one below hide for a while.
+
+- **Unit tests** (`tests/`, `pytest tests/ -v`) run offline against small synthetic fixtures and check code correctness, not model quality: sliding-window boundaries, RFM aggregation math, the profit formula's arithmetic, cancellation-netting edge cases, and split disjointness. 33 tests total, see the file-by-file breakdown in [Project Structure](#project-structure).
+- **Model quality** is PR-AUC, Brier score, and net profit, computed once on the held-out test split described in Models and Guardrails above, using `scripts/run_pipeline.py`. PR-AUC rather than ROC-AUC on purpose: ROC-AUC inflates performance on class-imbalanced data like this by rewarding correct ranking of the abundant negative class.
+- **Those numbers, on the real dataset:**
+
+  | Metric | Value |
+  |---|---|
+  | PR-AUC (held-out test) | 0.8233 |
+  | Brier score (held-out test) | 0.1781 |
+  | Optimal threshold | 0.02 |
+
+  | Strategy | Total Interventions | True Positives | Wasted Spend (FP) | Net Campaign Profit |
+  |---|---|---|---|---|
+  | Random (20%) | 1,710 | 1,061 | 649 | £21,532 |
+  | Default Threshold (0.5) | 6,400 | 4,724 | 1,676 | £60,063 |
+  | Profit-Optimized (0.02) | 8,368 | 5,294 | 3,074 | £100,998 |
+
+  A previous revision of this README reported PR-AUC 0.909 and a profit table from a split that let the same customer leak between train and validation, numbers that were real outputs but measured the wrong thing. The split is now fixed and verified by `tests/test_grouped_split.py`, and the table above is from an actual `scripts/run_pipeline.py` run against the real dataset, not a re-hash of the old, leaky figures.
+
+  The optimal threshold of 0.02 was specifically checked against a wider, log-spaced sweep down to 0.0001 (`scripts/check_threshold_floor.py`) to rule out the same search-boundary artifact that caused the original 0.1 finding: net profit is flat from 0.0001 to 0.01 (isotonic calibration maps that whole range to the same set of customers), rises to its peak at 0.02, then declines monotonically from 0.08 onward. Profit is lower on both sides of 0.02, the signature of a genuine local maximum, not a boundary effect. The 8,368-intervention, £100,998 result at threshold 0.02 was independently reproduced twice, once from the full pipeline run and once from the standalone threshold check reusing the same saved model against the same deterministically-reconstructed test split, and the two agree exactly.
+
+  Expect these exact figures to shift on a re-run with a different `RANDOM_SEED`, a different `data/raw/online_retail_II.xlsx` snapshot, or after any change to `config.py`'s financial assumptions; they are not fixed constants of the method.
+
+
+## Known limitations
+
+- Cancellation matching's `C`-prefix convention is a mitigation, not a guarantee; see Data Integrity above.
+- The three-way split can't stratify by churn label (a `GroupShuffleSplit` limitation), and splitting three ways shrinks each set further than a two-way split would. With a few thousand customers this is usually minor but hasn't been measured against the real dataset.
+- `monetary_avg` is mean revenue per transaction line item, not per order/invoice; the dashboard labels it explicitly to avoid implying true average order value.
+- The intervention success rate is a configurable constant, not a learned parameter; in production this would come from A/B testing.
 - Cold-start customers with no transaction history cannot be scored.
-- The single optimal threshold reported in Batch Analysis is computed globally and used only for the baseline comparison table; it does not drive individual scoring decisions, which use per-customer expected value instead (see Key Design Decisions). Segment-specific thresholds per spend tier would still capture heterogeneity that a single global threshold misses in that comparison.
-- The batch export uses the latest observation window per customer. Customers without a recent window are excluded.
+- The single global optimal threshold shown in Batch Analysis is used only for that baseline comparison table; it does not drive individual scoring decisions, which use per-customer expected value instead.
+- Batch export uses each customer's latest observation window; customers without a recent window are excluded.
